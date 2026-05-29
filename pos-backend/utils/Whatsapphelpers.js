@@ -129,7 +129,7 @@ function getCasualReply(msg) {
   if (lower.includes("cardapio") || lower.includes("menu")) return "cardapio";
   if (lower.includes("preco") || lower.includes("quanto") || lower.includes("custa"))
     return "cardapio";
-  if (lower.includes("horario") || lower.includes("abre") || lower.includes("fecha"))
+  if (lower.includes("horario") || lower.includes("abre") || lower.includes("fecha") || lower.includes(aberto)|| lower.includes(fechado))
     return "Estamos abertos de segunda à sexta das 18h às 23h.";
   if (lower.match(/bom dia|boa tarde|boa noite|oi|ola|oii|hey/))
     return "Olá! 🍔 Envie seu pedido em uma única mensagem e eu anoto tudo!";

@@ -775,7 +775,7 @@ const stepHandlers = {
 
         // Append Pix key if payment method is Pix
         if (newOrder.paymentMethod === "Pix") {
-          confirmMsg += "\n\n💳 Chave Pix: 019.715.056-09\n👤 JOÃO PEDRO LOPES BRITO";
+          confirmMsg += "\n\n💳 Chave Pix: 000.000.000\n👤 Person";
         }
 
         await sendWhatsAppReply(from, confirmMsg, sessionId);

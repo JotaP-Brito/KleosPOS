@@ -30,11 +30,20 @@ function normalizeOrderText(text) {
     .replace(/\b(macarrao)\s+(na|a|ao)\s+(bolonhesa)\b/gi, "$1 $3");
 
   // ---------- drink brand normalization ----------
-  // Remove "antartica" between "guarana" and container/size
   result = result
     .replace(/\b(guarana)\s+antartica\s+(lata|2l|1l|600ml|350ml|litro|litros)\b/g, "$1 $2")
-    // Also handle inverted order: "antartica guarana" -> "guarana"
     .replace(/\bantartica\s+(guarana)\b/g, "$1");
+
+  // ---------- 🆕 generic drink aliases ----------
+  // Expand common short names to full product names
+  result = result
+    .replace(/\bcoca\b(?!\s*cola)/gi, "coca cola")                // "coca" → "coca cola"
+    .replace(/\bsuco\b(?!\s*del\s+vale)/gi, "suco del vale");     // "suco" → "suco del vale"
+
+  // ---------- default drink containers (if missing) ----------
+  result = result
+    .replace(/\b(coca cola)\b(?!\s+(lata|2l|1l|600ml|350ml|litro))/gi, "$1 lata")
+    .replace(/\b(guarana)\b(?!\s+(lata|2l|1l|600ml|350ml|litro))/gi, "$1 lata");
 
   // ---------- product slang ----------
   result = result
