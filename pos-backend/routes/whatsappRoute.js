@@ -42,7 +42,7 @@ async function sendWhatsAppReply(chatId, text, sessionId) {
 async function sendMenuImage(chatId, sessionId) {
   try {
     const sid = sessionId || "default";
-    const imageUrl = "http://10.34.14.77:3000/public/images/cardapio.jpeg";
+    const imageUrl = "http://10.33.14.193:3000/public/images/cardapio.jpeg";
 
     await axios.post(
       `http://localhost:2785/api/sessions/${sid}/messages/send-image`,
@@ -112,8 +112,8 @@ function getCasualReply(msg) {
 function extractAddress(msg) {
   const text = msg.trim();
   const patterns = [
-    /(?:rua|r\.?|avenida|av\.?|travessa|trv\.?|alameda|rodovia|estrada)\s+[\w\s\-]+?,?\s*\d+/i,
-    /(?:rua|r\.?|avenida|av\.?)\s+[\w\s\-]+/i,
+    /(?:rua|avenida|av\.|travessa|trv\.|alameda|rodovia|estrada)\s+[\w\s\-]+?,?\s*\d+/i,
+    /(?:rua|avenida|av\.)\s+[\w\s\-]+/i,
     /\b(?:casa|apto|apartamento|bloco|bl|fundos|lote)\s*\w+/i
   ];
   for (const pattern of patterns) {
@@ -191,13 +191,13 @@ router.post("/webhook", async (req, res) => {
       const orderMsg = normalizeOrderText(rawMessage);
       const parsed = parseOrderByKeywords(orderMsg, products, additions);
       if (parsed && parsed.items.length > 0) {
-        let extType = extractOrderType(rawMessage);
+        const extType = extractOrderType(rawMessage);
         const extAddr = extractAddress(rawMessage);
         const extPay = extractPayment(rawMessage);
-        if (!extType && extAddr) extType = "Delivery";
         const updates = { step: "RECEBER_ITENS", items: parsed.items };
         if (extType) updates.orderType = extType;
-        if (extAddr) updates.address = extAddr;
+        // Only set address if a real delivery keyword was also found
+        if (extAddr && extType === "Delivery") updates.address = extAddr;
         if (extPay) updates.payment = extPay;
         updateSession(phone, updates);
         session = getSession(phone);
@@ -226,6 +226,13 @@ router.post("/webhook", async (req, res) => {
         return res.json({ status: "ok" });
       }
 
+      // Enrich items that came from LLM (no price) with prices from the menu
+      parsed.items = parsed.items.map(item => {
+        if (item.price != null && item.price > 0) return item;
+        const match = products.find(p => p.name.toLowerCase() === item.name.toLowerCase());
+        return { ...item, price: match ? match.price : 0 };
+      });
+
       // Fuzzy additions (unchanged)
       const normalizedMessage = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
       const messageWords = normalizedMessage.split(" ");
@@ -237,8 +244,9 @@ router.post("/webhook", async (req, res) => {
       for (const add of additions) {
         const addNorm = add.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
         if (parsed.items.some(item => (item.additions || []).some(a => a.name === add.name))) continue;
-        const addSyn = synonyms[addNorm] || addNorm;
-        if (expandedProductNames.some(name => name.includes(addNorm) || name.includes(addSyn))) { console.log(`Skipping addition "${add.name}" – already implied by product`); continue; }
+        // Only skip if the addition's OWN name is part of a product name.
+        // Do NOT use synonyms here: 'ovo' must not be skipped just because X-Egg exists.
+        if (allProductNames.some(name => name.includes(addNorm))) { console.log(`Skipping addition "${add.name}" - already implied by product`); continue; }
 
         let bestTokenIndex = -1, bestDist = Infinity;
         for (let i = 0; i < messageWords.length; i++) {
@@ -266,14 +274,24 @@ router.post("/webhook", async (req, res) => {
         observation: item.observation || "", additions: item.additions || []
       }));
 
-      let extType = extractOrderType(rawMessage);
-      const extAddr = extractAddress(rawMessage);
-      const extPay = extractPayment(rawMessage);
-      if (!extType && extAddr) extType = "Delivery";
       const updates = { items: orderItems };
-      if (extType) updates.orderType = extType;
-      if (extAddr) updates.address = extAddr;
-      if (extPay) updates.payment = extPay;
+
+      // Only extract orderType/address/payment if not already set in session.
+      // Prevents food descriptions (e.g. '1 lacador com ovo') from being
+      // misread as an address or order type when the customer is editing.
+      const sess0 = getSession(phone);
+      if (!sess0.orderType) {
+        let extType = extractOrderType(rawMessage);
+        const extAddr = extractAddress(rawMessage);
+        if (!extType && extAddr) extType = "Delivery";
+        if (extType) updates.orderType = extType;
+        if (extAddr) updates.address = extAddr;
+      }
+      if (!sess0.payment) {
+        const extPay = extractPayment(rawMessage);
+        if (extPay) updates.payment = extPay;
+      }
+
       updateSession(phone, updates);
 
       const sess = getSession(phone);
@@ -363,17 +381,21 @@ router.post("/webhook", async (req, res) => {
           await sendWhatsAppReply(from, `✅ Pedido #${String(newOrder._id).slice(-6)} confirmado! Já estamos preparando. Obrigado pela preferência! 🍔`, sessionId);
         } catch (err) { await sendWhatsAppReply(from, "Houve um problema ao criar o seu pedido. Por favor, tente novamente.", sessionId); }
         clearSession(phone);
+      } else if (cl?.confirmado === false) {
+        // Let the customer fix their order instead of starting over
+        updateSession(phone, { step: "RECEBER_ITENS", items: [], orderType: null, address: "", payment: null });
+        await sendWhatsAppReply(from, "Sem problema! 😊 O que gostaria de alterar? Pode me enviar o novo pedido.", sessionId);
       } else {
-        await sendWhatsAppReply(from, "Pedido não confirmado. Se quiser fazer um novo pedido, é só começar de novo! 🙂", sessionId);
-        clearSession(phone);
+        // Didn't understand yes/no — ask again
+        await sendWhatsAppReply(from, "Por favor, responda *sim* para confirmar ou *não* para alterar o pedido.", sessionId);
       }
       return res.json({ status: "ok" });
     }
 
-    // Fallback
+    // Fallback — reset cleanly and prompt
     clearSession(phone);
-    await sendWhatsAppReply(from, "Olá! Envia o teu pedido e eu ajudo. 🍔", sessionId);
     updateSession(phone, { step: "INICIO" });
+    await sendWhatsAppReply(from, "Olá! Envia o teu pedido e eu ajudo. 🍔", sessionId);
     res.json({ status: "ok" });
   } catch (error) {
     console.error("Erro no webhook WhatsApp:", error);
