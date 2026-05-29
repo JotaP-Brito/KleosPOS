@@ -1,9 +1,9 @@
+// utils/keywordParser.js
 const { generateAliases } = require("./orderNormalizer");
 
 function parseOrderByKeywords(messageText, menuItems, additions) {
   if (!messageText || !menuItems.length) return null;
 
-  // Normalize the message first
   const normalizedMsg = messageText
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -16,16 +16,9 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
   const foundItems = [];
   const usedIndices = new Set();
 
-  const stopWords = new Set([
-    "lata", "litro", "litros", "ml", "l", "2l", "1l", "600ml", "350ml",
-    "un", "unid", "unidade", "unidades", "x", "de", "com", "mais", "sem", "para",
-    "quero", "pedido", "pedir", "vou", "vamos", "ai", "aí", "no", "na", "faz", "fazer"
-  ]);
-
-  // ---- Quantity detection from surrounding words ----
   const quantityMap = {
-    um: 1, uma: 1, dois: 2, duas: 2, tres: 3, três: 3,
-    quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10
+    um: 1, uma: 1, dois: 2, duas: 2, tres: 3,
+    quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10,
   };
 
   // Build alias map for all products
@@ -35,7 +28,7 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
     productAliases.set(product, aliases);
   }
 
-  // 1. Multi‑word phrase matching using aliases
+  // 1. Multi-word phrase matching
   for (const [product, aliases] of productAliases) {
     for (const alias of aliases) {
       const aliasWords = alias.split(" ");
@@ -43,17 +36,11 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
         for (let i = 0; i <= words.length - aliasWords.length; i++) {
           const slice = words.slice(i, i + aliasWords.length).join(" ");
           if (slice === alias) {
-            // Found a match – determine quantity
             let quantity = 1;
             if (i > 0) {
               const prev = words[i - 1];
-              if (/^\d+$/.test(prev)) {
-                quantity = parseInt(prev, 10);
-                usedIndices.add(i - 1);
-              } else if (quantityMap[prev]) {
-                quantity = quantityMap[prev];
-                usedIndices.add(i - 1);
-              }
+              if (/^\d+$/.test(prev)) { quantity = parseInt(prev, 10); usedIndices.add(i - 1); }
+              else if (quantityMap[prev]) { quantity = quantityMap[prev]; usedIndices.add(i - 1); }
             }
             for (let j = i; j < i + aliasWords.length; j++) usedIndices.add(j);
             foundItems.push({
@@ -62,19 +49,19 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
               quantity,
               observation: "",
               additions: [],
-              indices: Array.from({ length: aliasWords.length }, (_, k) => i + k)
+              startIndex: i,  // ← track position for observation matching
             });
-            break; // go to next product
+            break;
           }
         }
       }
-      if (foundItems.some(item => item.name === product.name)) break;
+      if (foundItems.some((item) => item.name === product.name)) break;
     }
   }
 
-  // 2. Single‑token matching using aliases
+  // 2. Single-token matching
   for (const [product, aliases] of productAliases) {
-    if (foundItems.some(item => item.name === product.name)) continue;
+    if (foundItems.some((item) => item.name === product.name)) continue;
     for (const alias of aliases) {
       const aliasWords = alias.split(" ");
       if (aliasWords.length === 1) {
@@ -85,13 +72,8 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
             let quantity = 1;
             if (i > 0) {
               const prev = words[i - 1];
-              if (/^\d+$/.test(prev)) {
-                quantity = parseInt(prev, 10);
-                usedIndices.add(i - 1);
-              } else if (quantityMap[prev]) {
-                quantity = quantityMap[prev];
-                usedIndices.add(i - 1);
-              }
+              if (/^\d+$/.test(prev)) { quantity = parseInt(prev, 10); usedIndices.add(i - 1); }
+              else if (quantityMap[prev]) { quantity = quantityMap[prev]; usedIndices.add(i - 1); }
             }
             usedIndices.add(i);
             foundItems.push({
@@ -100,33 +82,47 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
               quantity,
               observation: "",
               additions: [],
-              indices: [i]
+              startIndex: i,  // ← track position
             });
             break;
           }
         }
       }
-      if (foundItems.some(item => item.name === product.name)) break;
+      if (foundItems.some((item) => item.name === product.name)) break;
     }
   }
 
   if (foundItems.length === 0) return null;
 
-  // ---- Observations: "sem X" ----
-  const obsMatches = normalizedMsg.match(/sem\s+(\w+)/gi);
-  if (obsMatches) {
-    for (const match of obsMatches) {
-      const parts = match.split(/\s+/);
-      if (parts.length >= 2) {
-        const term = parts.slice(1).join(" ");
-        // Find nearest preceding item (simple: attach to first item, you may improve)
-        foundItems[0].observation = `Sem ${term}`;
+  // ---- FIX: Attach "sem X" observation to the NEAREST PRECEDING item ----
+  // Previously always attached to foundItems[0], which was wrong.
+  const obsRegex = /sem\s+(\w+(?:\s+\w+)?)/gi;
+  let obsMatch;
+  while ((obsMatch = obsRegex.exec(normalizedMsg)) !== null) {
+    const obsIndex = normalizedMsg.slice(0, obsMatch.index).split(" ").length - 1;
+    const term = obsMatch[1].trim();
+
+    // Find the item whose startIndex is closest and before the "sem"
+    let nearestItem = null;
+    let smallestGap = Infinity;
+    for (const item of foundItems) {
+      if (item.startIndex <= obsIndex) {
+        const gap = obsIndex - item.startIndex;
+        if (gap < smallestGap) {
+          smallestGap = gap;
+          nearestItem = item;
+        }
       }
     }
+
+    // Fallback: if no item precedes it, attach to the first item
+    const target = nearestItem || foundItems[0];
+    const existing = target.observation ? target.observation + ", " : "";
+    target.observation = `${existing}Sem ${term}`;
   }
 
-  // Clean up indices
-  const cleanedItems = foundItems.map(({ indices, ...item }) => item);
+  // Clean up the internal startIndex before returning
+  const cleanedItems = foundItems.map(({ startIndex, ...item }) => item);
   return { order: true, items: cleanedItems };
 }
 

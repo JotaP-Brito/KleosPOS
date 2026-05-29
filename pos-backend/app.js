@@ -1,5 +1,6 @@
 const path = require("path");
 const fs = require("fs");
+const axios = require("axios");   // 👈 needed for the auto‑start function
 
 // Try loading .env, fallback to env.defaults if .env doesn't exist
 const envPath = path.join(__dirname, ".env");
@@ -75,12 +76,68 @@ app.get("*", (req, res, next) => {
 // Global Error Handler
 app.use(globalErrorHandler);
 
+// ---------- Auto‑start OpenWA session on backend boot ----------
+async function ensureOpenWASessionActive() {
+  const OPENWA_BASE = process.env.OPENWA_URL || "http://localhost:2785";
+  const API_KEY = process.env.OPENWA_API_KEY || "dev-admin-key";
+  const SESSION_ID = process.env.OPENWA_SESSION_ID;
+
+  if (!SESSION_ID) {
+    console.log("⚠️  OPENWA_SESSION_ID not set – skipping auto‑start");
+    return;
+  }
+
+  try {
+    // 1. Check session status
+    const { data: session } = await axios.get(
+      `${OPENWA_BASE}/api/sessions/${SESSION_ID}`,
+      { headers: { "X-API-Key": API_KEY } }
+    );
+
+    // 2. Start ONLY if the session is truly disconnected or stopped
+    if (session.status === "disconnected" || session.status === "stopped") {
+      console.log(`⚡ Session ${SESSION_ID} is "${session.status}" – starting...`);
+      await axios.post(
+        `${OPENWA_BASE}/api/sessions/${SESSION_ID}/start`,
+        {},
+        { headers: { "X-API-Key": API_KEY } }
+      );
+      console.log(`✅ Session ${SESSION_ID} started successfully`);
+    } else {
+      console.log(`✅ Session ${SESSION_ID} is ${session.status} – no need to start`);
+    }
+
+    // 3. Ensure webhook is registered
+    const { data: webhooks } = await axios.get(
+      `${OPENWA_BASE}/api/sessions/${SESSION_ID}/webhooks`,
+      { headers: { "X-API-Key": API_KEY } }
+    );
+
+    const expectedUrl = `http://host.docker.internal:3000/api/whatsapp/webhook`;
+    const alreadyRegistered = webhooks.some(w => w.url === expectedUrl);
+
+    if (!alreadyRegistered) {
+      console.log(`⚡ Webhook not found – registering...`);
+      await axios.post(
+        `${OPENWA_BASE}/api/sessions/${SESSION_ID}/webhooks`,
+        { url: expectedUrl, events: ["message.received"] },
+        { headers: { "X-API-Key": API_KEY, "Content-Type": "application/json" } }
+      );
+      console.log(`✅ Webhook registered`);
+    } else {
+      console.log(`✅ Webhook already registered`);
+    }
+  } catch (err) {
+    console.error("❌ Failed to auto‑start OpenWA session:", err.message);
+  }
+}
+
 // ---------- Cron job: Guardar resumo diário à meia‑noite (horário de Brasília) ----------
 cron.schedule("0 0 * * *", async () => {
   try {
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    const dateStr = getLocalDateStr(yesterday);   // now works ✅
+    const dateStr = getLocalDateStr(yesterday);
 
     const start = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate());
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
@@ -140,10 +197,11 @@ cron.schedule("0 0 * * *", async () => {
     console.error("Erro no resumo diário automático:", error);
   }
 }, {
-  timezone: "America/Sao_Paulo"   // 👈 sempre meia‑noite no horário do Brasil
+  timezone: "America/Sao_Paulo"
 });
 
-// Server
+// ---------- Start the server (only once) ----------
 app.listen(PORT, () => {
   console.log(`☑️  POS Server is listening on port ${PORT}`);
+  ensureOpenWASessionActive();   // ← auto‑start WhatsApp session & webhook
 });
