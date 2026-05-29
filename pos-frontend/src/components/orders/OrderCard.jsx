@@ -1,8 +1,9 @@
+// components/orders/OrderCard.jsx
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDispatch } from "react-redux";
 import { FaLongArrowAltRight } from "react-icons/fa";
-import { MdPayment, MdPrint, MdTimer } from "react-icons/md";
+import { MdPayment, MdPrint, MdTimer, MdDeliveryDining } from "react-icons/md";
 import { FiEdit } from "react-icons/fi";
 import { formatDateAndTime, getAvatarName } from "../../utils/index";
 import OrderStatusBadge from "../shared/OrderStatusBadge";
@@ -18,16 +19,9 @@ const useElapsedTime = (startDate, status) => {
       const diff = Math.max(0, now - new Date(startDate).getTime());
       const minutes = Math.floor(diff / 60000);
       const seconds = Math.floor((diff % 60000) / 1000);
-      setElapsed(
-        `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
-      );
+      setElapsed(`${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`);
     };
-
-    if (["Ready", "Completed", "Cancelled"].includes(status)) {
-      update();
-      return;
-    }
-
+    if (["Ready", "Completed", "Cancelled"].includes(status)) { update(); return; }
     update();
     const timer = setInterval(update, 1000);
     return () => clearInterval(timer);
@@ -36,43 +30,43 @@ const useElapsedTime = (startDate, status) => {
   return elapsed;
 };
 
-const OrderCard = ({ order, onShowPayment, onShowInvoice }) => {
+const OrderCard = ({ order, onShowPayment, onShowInvoice, onShowDeliveryFee }) => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const elapsed = useElapsedTime(order.orderDate, order.orderStatus);
 
+  // ✅ True when this delivery order is waiting for the employee to set the fee
+  const isPendingDeliveryFee =
+    order.orderType === "Delivery" && order.paymentStatus === "PendingDeliveryFee";
+
   const getOrderTypeDisplay = () => {
     switch (order.orderType) {
-      case "Dine-in":
-        return `Mesa ${order.table?.tableNo || "N/D"}`;
-      case "Takeaway":
-        return "Para Levar";
-      case "Delivery":
-        return "Entrega";
-      default:
-        return "No Local";
+      case "Dine-in":   return `Mesa ${order.table?.tableNo || "N/D"}`;
+      case "Takeaway":  return "Para Levar";
+      case "Delivery":  return "Entrega";
+      default:          return "No Local";
     }
   };
 
   const getStatusMessage = () => {
     switch (order.orderStatus) {
-      case "Ready":
-        return "Pronto";
-      case "In Progress":
-        return "Em andamento";
-      case "Pending":
-        return "Pendente";
-      default:
-        return order.orderStatus;
+      case "Ready":       return "Pronto";
+      case "In Progress": return "Em andamento";
+      case "Pending":     return "Pendente";
+      default:            return order.orderStatus;
     }
   };
 
-  const paymentBadge =
-    order.paymentStatus === "Paid" ? (
-      <span className="text-green-400 text-sm bg-green-400/10 px-2 py-0.5 rounded-full">Pago</span>
-    ) : (
-      <span className="text-yellow-400 text-sm bg-yellow-400/10 px-2 py-0.5 rounded-full">Pendente</span>
-    );
+  // ✅ Payment badge – show a distinct amber "Taxa pendente" badge for delivery fee orders
+  const paymentBadge = isPendingDeliveryFee ? (
+    <span className="text-orange-400 text-sm bg-orange-400/10 px-2 py-0.5 rounded-full animate-pulse">
+      🛵 Taxa pendente
+    </span>
+  ) : order.paymentStatus === "Paid" ? (
+    <span className="text-green-400 text-sm bg-green-400/10 px-2 py-0.5 rounded-full">Pago</span>
+  ) : (
+    <span className="text-yellow-400 text-sm bg-yellow-400/10 px-2 py-0.5 rounded-full">Pendente</span>
+  );
 
   const handleEdit = () => {
     const cartItems = order.items.map((item) => ({
@@ -90,8 +84,24 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice }) => {
   };
 
   return (
-    <div className="w-full min-w-0 bg-[#262626] p-5 rounded-lg mb-4">
-      {/* cabeçalho do cliente */}
+    <div className={`w-full min-w-0 bg-[#262626] p-5 rounded-lg mb-4 ${
+      isPendingDeliveryFee ? "ring-2 ring-orange-400/50" : ""
+    }`}>
+
+      {/* ✅ NEW: delivery address bar shown for delivery orders */}
+      {order.orderType === "Delivery" && order.deliveryAddress && (
+        <div className="flex items-center gap-2 mb-3 bg-[#1f1f1f] rounded-lg px-3 py-2">
+          <MdDeliveryDining size={16} className="text-[#f6b100] shrink-0" />
+          <p className="text-[#ababab] text-xs truncate">{order.deliveryAddress}</p>
+          {order.deliveryFee > 0 && (
+            <span className="ml-auto text-[#f6b100] text-xs font-semibold whitespace-nowrap">
+              +R$ {order.deliveryFee.toFixed(2)}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Cabeçalho do cliente */}
       <div className="flex items-center gap-4">
         <button className="bg-[#f6b100] p-3 text-xl font-bold rounded-lg min-w-[50px]">
           {getAvatarName(order.customerDetails.name)}
@@ -124,12 +134,12 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice }) => {
         </div>
       </div>
 
-      {/* data */}
+      {/* Data */}
       <div className="flex justify-end items-center mt-2 text-[#ababab] text-sm">
         <p>{formatDateAndTime(order.orderDate)}</p>
       </div>
 
-      {/* tabela de itens */}
+      {/* Tabela de itens */}
       <div className="mt-3 bg-[#1f1f1f] rounded-lg p-3 max-h-48 overflow-y-auto">
         <table className="w-full text-sm text-[#ababab]">
           <thead>
@@ -145,7 +155,6 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice }) => {
                 ? item.additions.reduce((sum, a) => sum + a.price, 0)
                 : 0;
               const itemTotal = (item.price + additionsTotal) * (item.quantity || 1);
-
               return (
                 <tr key={idx} className="border-b border-[#2a2a2a] last:border-0">
                   <td className="py-1 text-left text-[#f5f5f5]">
@@ -156,9 +165,7 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice }) => {
                       </div>
                     )}
                     {item.observation && (
-                      <div className="text-xs text-yellow-400 italic ml-2">
-                        ⚠️ {item.observation}
-                      </div>
+                      <div className="text-xs text-yellow-400 italic ml-2">⚠️ {item.observation}</div>
                     )}
                   </td>
                   <td className="py-1 text-center">{item.quantity || 1}</td>
@@ -172,7 +179,7 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice }) => {
         </table>
       </div>
 
-      {/* Rodapé com cronómetro + total */}
+      {/* Rodapé cronómetro + total */}
       <div className="flex items-center justify-between mt-4">
         <div className="flex items-center gap-2 text-[#ababab] text-sm">
           <MdTimer size={18} />
@@ -187,20 +194,45 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice }) => {
         </div>
       </div>
 
-      {/* botões de ação (agora chamam funções passadas por props) */}
+      {/* Botões de ação */}
       <div className="flex justify-end gap-4 mt-3 pt-2 border-t border-[#3a3a3a]">
-        <button onClick={handleEdit} className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base" title="Editar pedido">
+        <button
+          onClick={handleEdit}
+          className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base"
+          title="Editar pedido"
+        >
           <FiEdit size={18} />
           <span>Editar</span>
         </button>
 
-        {order.paymentStatus !== "Paid" && (
-          <button onClick={() => onShowPayment(order)} className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base" title="Registar pagamento">
+        {/* ✅ NEW: show "Definir Taxa" button for pending delivery fee orders */}
+        {isPendingDeliveryFee && onShowDeliveryFee && (
+          <button
+            onClick={() => onShowDeliveryFee(order)}
+            className="text-orange-400 hover:text-orange-300 transition-colors flex items-center gap-1 text-base font-semibold"
+            title="Definir taxa de entrega"
+          >
+            <MdDeliveryDining size={20} />
+            <span>Definir Taxa</span>
+          </button>
+        )}
+
+        {order.paymentStatus !== "Paid" && order.paymentStatus !== "PendingDeliveryFee" && (
+          <button
+            onClick={() => onShowPayment(order)}
+            className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base"
+            title="Registar pagamento"
+          >
             <MdPayment size={22} />
             <span>Pagamento</span>
           </button>
         )}
-        <button onClick={() => onShowInvoice(order)} className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base" title="Imprimir recibo">
+
+        <button
+          onClick={() => onShowInvoice(order)}
+          className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base"
+          title="Imprimir recibo"
+        >
           <MdPrint size={22} />
           <span>Recibo</span>
         </button>

@@ -16,6 +16,20 @@ const orderSchema = new mongoose.Schema({
         type: String,
         default: "",
     },
+    // ✅ Delivery fee set by employee in POS
+    deliveryFee: {
+        type: Number,
+        default: 0,
+    },
+    // ✅ NEW: troco information
+    changeNeeded: {
+        type: Boolean,
+        default: false,
+    },
+    changeFor: {
+        type: Number,
+        default: 0,
+    },
     orderStatus: {
         type: String,
         required: true,
@@ -45,10 +59,14 @@ const orderSchema = new mongoose.Schema({
     },
     paymentStatus: {
         type: String,
-        enum: ["Pending", "Paid"],
+        enum: ["Pending", "PendingDeliveryFee", "Paid"],
         default: "Pending",
     },
     paymentMethod: String,
+    whatsappChatId: {
+        type: String,
+        default: "",
+    },
     paymentData: {
         razorpay_order_id: String,
         razorpay_payment_id: String,

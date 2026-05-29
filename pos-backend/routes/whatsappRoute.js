@@ -4,7 +4,7 @@
 const express = require("express");
 const axios = require("axios");
 const Order = require("../models/orderModel");
-const { parseWhatsAppOrderWithLLM } = require("../utils/llmParser");
+const { parseWhatsAppOrderWithLLM } = require("../utils/llmParser");   // kept for future use
 const { parseOrderByKeywords } = require("../utils/keywordParser");
 const { getSession, updateSession, clearSession } = require("../utils/sessionManager");
 const { getMenuData } = require("../utils/menuCache");
@@ -18,6 +18,8 @@ const {
   classifyStep,
   getCasualReply,
   buildOrderSummary,
+  getAdditionAlias,          // 🆕 for bife/alias detection
+  detectUnknownAddition,     // 🆕 scans raw message for aliases
 } = require("../utils/whatsappHelpers");
 
 const router = express.Router();
@@ -67,7 +69,7 @@ async function sendTyping(chatId, sessionId) {
       { chatId },
       { headers: { "X-API-Key": OPENWA_KEY() } }
     );
-  } catch (_) {}
+  } catch (_) { }
 }
 
 async function sendWhatsAppReply(chatId, text, sessionId) {
@@ -86,7 +88,7 @@ async function sendWhatsAppReply(chatId, text, sessionId) {
 async function sendMenuImage(chatId, sessionId) {
   try {
     const sid = sessionId || "default";
-    // ✅ FIX: URL now comes from .env (add MENU_IMAGE_URL=http://... to your .env file)
+    // ✅ URL from .env (add MENU_IMAGE_URL=http://... to your .env file)
     const imageUrl = process.env.MENU_IMAGE_URL || "http://localhost:3000/public/images/cardapio.jpeg";
 
     await axios.post(
@@ -120,7 +122,7 @@ function levenshtein(a, b) {
 }
 
 // ─────────────────────────────────────────────
-// Fuzzy addition enrichment
+// Fuzzy addition enrichment (only used for LLM results)
 // ─────────────────────────────────────────────
 function enrichWithAdditions(parsedItems, rawMessage, products, additions) {
   const normalizedMessage = rawMessage
@@ -174,7 +176,6 @@ function enrichWithAdditions(parsedItems, rawMessage, products, additions) {
 
 // ─────────────────────────────────────────────
 // State machine: step handlers
-// Each handler receives (ctx) and returns early or falls through.
 // ─────────────────────────────────────────────
 
 const stepHandlers = {
@@ -192,7 +193,7 @@ const stepHandlers = {
     if (!finalType) {
       await sendWhatsAppReply(from, "Qual tipo de macarrão? 🍝\n• Na chapa\n• À bolonhesa", sessionId);
       updateSession(phone, { macarraoMissing: "type" });
-      return true; // handled
+      return true;
     }
     if (!finalSize) {
       await sendWhatsAppReply(from, "E o tamanho? 📏\n• P (pequeno)\n• G (grande)", sessionId);
@@ -232,6 +233,9 @@ const stepHandlers = {
     const parsed = parseOrderByKeywords(orderMsg, products, additions);
 
     if (parsed && parsed.items.length > 0) {
+      // Mark that the keyword parser already attached additions & observations
+      parsed.byKeyword = true;
+
       const lowerRaw = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
       const hasMacarraoMention = /\bmacarrao\b/.test(lowerRaw) || /\bmac\b/.test(lowerRaw);
       const hasMacarraoInItems = parsed.items.some((item) => item.name.toLowerCase().includes("macarrão"));
@@ -275,9 +279,13 @@ const stepHandlers = {
     if (!session.skipParsing) {
       const orderMsg = normalizeOrderText(rawMessage);
       parsed = parseOrderByKeywords(orderMsg, products, additions);
-      if (!parsed || !parsed.items || parsed.items.length === 0) {
-        console.log("Keyword parser found nothing, trying LLM…");
-        try { parsed = await parseWhatsAppOrderWithLLM(rawMessage, products, additions); } catch (_) { parsed = null; }
+
+      if (parsed && parsed.items.length > 0) {
+        parsed.byKeyword = true;   // keyword parser already handled additions
+      } else {
+        // ── LLM fallback – NOT IN USE, kept for future ──
+        // console.log("Keyword parser found nothing, trying LLM…");
+        // try { parsed = await parseWhatsAppOrderWithLLM(rawMessage, products, additions); } catch (_) { parsed = null; }
       }
     } else {
       parsed = { order: true, items: session.items || [] };
@@ -300,7 +308,9 @@ const stepHandlers = {
         }
         return true;
       }
-      const fallback = getCasualReply(rawMessage) || "Desculpe, não consegui entender. Pode tentar '2 X-Bacon, 1 Coca'?";
+      // Fallback: reply with a casual message or the greeting
+      const casual = getCasualReply(rawMessage);
+      const fallback = casual || "Desculpe, não consegui entender. Pode tentar '2 X-Bacon, 1 Coca'?";
       await sendWhatsAppReply(from, fallback, sessionId);
       return true;
     }
@@ -323,22 +333,110 @@ const stepHandlers = {
       return true;
     }
 
-    // Enrich LLM items (no price) from menu
+    // Enrich LLM items (no price) from menu – only if not already priced
     parsed.items = parsed.items.map((item) => {
       if (item.price != null && item.price > 0) return item;
       const match = products.find((p) => p.name.toLowerCase() === item.name.toLowerCase());
       return { ...item, price: match ? match.price : 0 };
     });
 
-    // Fuzzy additions
-    parsed.items = enrichWithAdditions(parsed.items, rawMessage, products, additions);
+    // ✅ Fuzzy additions ONLY for LLM results (keyword parser already did it)
+    if (!parsed.byKeyword) {
+      parsed.items = enrichWithAdditions(parsed.items, rawMessage, products, additions);
+    }
 
-    const orderItems = parsed.items.map((item) => ({
+    // ── Build the initial order items list ──
+    let orderItems = parsed.items.map((item) => ({
       name: item.name, price: item.price || 0, quantity: item.quantity || 1,
       observation: item.observation || "", additions: item.additions || [],
     }));
 
-    const updates = { items: orderItems };
+    // ── FIX: split items when a "sem" quantity is given (e.g., "2 laçador, 1 sem bacon") ──
+    const finalItems = [];
+    for (const item of orderItems) {
+      if (!item.observation) {
+        finalItems.push(item);
+        continue;
+      }
+
+      // Try to find a pattern like "1 sem bacon" in the original message
+      const obsLower = item.observation.toLowerCase();
+      const semMatch = obsLower.match(/sem\s+(\w+)/);
+      if (!semMatch) {
+        finalItems.push(item);
+        continue;
+      }
+
+      const ingredient = semMatch[1]; // e.g., "bacon"
+      const rawLower = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+      // Look for a number immediately before "sem" in the original message
+      const splitPattern = new RegExp(`(\\d+)\\s*sem\\s+${ingredient}`, 'i');
+      const splitMatch = rawLower.match(splitPattern);
+
+      if (splitMatch) {
+        const splitQuantity = parseInt(splitMatch[1], 10);
+        if (splitQuantity > 0 && item.quantity > splitQuantity) {
+          // Create the "sem" item with the split quantity
+          finalItems.push({
+            ...item,
+            quantity: splitQuantity,
+            observation: `Sem ${ingredient}`,
+          });
+
+          // The remaining items without the observation
+          finalItems.push({
+            ...item,
+            quantity: item.quantity - splitQuantity,
+            observation: "",
+          });
+          continue; // do not add the original merged item
+        }
+      }
+
+      // Fallback: keep the original item (observation applies to all)
+      finalItems.push(item);
+    }
+
+    // ── Check for unknown addition aliases (e.g., "bife") ──
+    const usedWords = new Set();
+    for (const item of parsed.items) {
+      const nameWords = item.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(" ");
+      nameWords.forEach(w => usedWords.add(w));
+      if (item.additions) {
+        item.additions.forEach(a => {
+          const addWords = a.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(" ");
+          addWords.forEach(w => usedWords.add(w));
+        });
+      }
+    }
+    // Also mark words from observations (like "bacon") as used
+    finalItems.forEach(item => {
+      if (item.observation) {
+        item.observation.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().split(" ").forEach(w => usedWords.add(w));
+      }
+    });
+
+    const unknownAddition = detectUnknownAddition(rawMessage, usedWords);
+    if (unknownAddition) {
+      const optionList = unknownAddition.options
+        .map((opt, i) => `${i + 1} - ${opt.name}`)
+        .join("\n");
+      updateSession(phone, {
+        step: "PERGUNTAR_ADICIONAL",
+        pendingAdditionAlias: unknownAddition,
+        items: finalItems,   // keep the items already built
+      });
+      await sendWhatsAppReply(
+        from,
+        `🍖 Qual ${unknownAddition.category} você gostaria?\n${optionList}`,
+        sessionId
+      );
+      return true;
+    }
+
+    // ── Continue with the normal flow ──
+    const updates = { items: finalItems };
     const sess0 = getSession(phone);
     if (!sess0.orderType) {
       let extType = extractOrderType(rawMessage);
@@ -370,14 +468,9 @@ const stepHandlers = {
       updateSession(phone, { step: "PERGUNTAR_TIPO" });
       await sendWhatsAppReply(from, "📋 Itens registados! Como deseja receber o pedido?\n1️⃣ Para levar\n2️⃣ Entrega\n3️⃣ No local", sessionId);
     } else if (needAddr && !hasAddr) {
-      const partialAddr = extractAddress(rawMessage) || rawMessage.trim();
-      if (isWeakAddress(partialAddr)) {
-        updateSession(phone, { step: "PERGUNTAR_MORADA_DETALHES", address: partialAddr });
-        await sendWhatsAppReply(from, `🏠 Encontrei: "${partialAddr}". Pode me informar o número da casa/apartamento ou mais detalhes?`, sessionId);
-      } else {
-        updateSession(phone, { step: "PERGUNTAR_PAGAMENTO", address: partialAddr });
-        await sendWhatsAppReply(from, "💳 Qual a forma de pagamento? (Dinheiro, Cartão ou Pix)", sessionId);
-      }
+      // Simplified address flow: accept full message
+      updateSession(phone, { step: "PERGUNTAR_PAGAMENTO", address: rawMessage.trim() });
+      await sendWhatsAppReply(from, "💳 Qual a forma de pagamento? (Dinheiro, Cartão ou Pix)", sessionId);
     } else if (!hasPayment) {
       updateSession(phone, { step: "PERGUNTAR_PAGAMENTO" });
       await sendWhatsAppReply(from, "💳 Qual a forma de pagamento?\n1️⃣ Dinheiro\n2️⃣ Cartão\n3️⃣ Pix", sessionId);
@@ -407,23 +500,9 @@ const stepHandlers = {
   // ── PERGUNTAR_MORADA ─────────────────────────────────────────────────────
   async PERGUNTAR_MORADA(ctx) {
     const { phone, from, rawMessage, sessionId } = ctx;
-    const addr = extractAddress(rawMessage) || rawMessage.trim();
-    if (isWeakAddress(addr)) {
-      updateSession(phone, { step: "PERGUNTAR_MORADA_DETALHES", address: addr });
-      await sendWhatsAppReply(from, `🏠 Entendi "${addr}". Pode me informar o número da casa/apartamento ou um complemento?`, sessionId);
-    } else {
-      updateSession(phone, { step: "PERGUNTAR_PAGAMENTO", address: addr });
-      await sendWhatsAppReply(from, "💳 Qual a forma de pagamento? (Dinheiro, Cartão ou Pix)", sessionId);
-    }
-    return true;
-  },
-
-  // ── PERGUNTAR_MORADA_DETALHES ────────────────────────────────────────────
-  async PERGUNTAR_MORADA_DETALHES(ctx) {
-    const { phone, from, rawMessage, sessionId, session } = ctx;
-    const detail = rawMessage.trim();
-    const fullAddress = `${session.address || ""} ${detail}`.trim();
-    updateSession(phone, { step: "PERGUNTAR_PAGAMENTO", address: fullAddress });
+    // Simplified: accept the full message as address
+    const addr = rawMessage.trim();
+    updateSession(phone, { step: "PERGUNTAR_PAGAMENTO", address: addr });
     await sendWhatsAppReply(from, "💳 Qual a forma de pagamento? (Dinheiro, Cartão ou Pix)", sessionId);
     return true;
   },
@@ -436,12 +515,207 @@ const stepHandlers = {
       await sendWhatsAppReply(from, "Não entendi a forma de pagamento. Pode escolher Dinheiro, Cartão ou Pix?", sessionId);
       return true;
     }
-    updateSession(phone, { payment: pay, step: "CONFIRMAR" });
     const sess = getSession(phone);
-    const { total, tipo, itens } = buildOrderSummary(sess);
+    const isDelivery = sess.orderType === "Delivery";
+
+    // ── Delivery + Dinheiro: ask for change ──
+    if (isDelivery && pay === "Dinheiro") {
+      updateSession(phone, { payment: pay, step: "PERGUNTAR_TROCO" });
+      await sendWhatsAppReply(from, "💵 Vai precisar de troco? (sim / não)", sessionId);
+      return true;
+    }
+
+    if (isDelivery) {
+      // Delivery non‑cash: save immediately
+      updateSession(phone, { payment: pay, step: "AGUARDAR_TAXA" });
+      const updatedSess = getSession(phone);
+      const { itens } = buildOrderSummary(updatedSess);
+      try {
+        const newOrder = new Order({
+          customerDetails: { name: ctx.contact?.name || "Cliente WhatsApp", phone, guests: 1 },
+          orderType: "Delivery",
+          deliveryAddress: updatedSess.address,
+          whatsappChatId: from,
+          table: null,
+          isStanding: false,
+          orderStatus: "Pending",
+          bills: { total: updatedSess.items.reduce((s, i) => s + (i.price + (i.additions || []).reduce((a, b) => a + b.price, 0)) * (i.quantity || 1), 0), tax: 0, totalWithTax: updatedSess.items.reduce((s, i) => s + (i.price + (i.additions || []).reduce((a, b) => a + b.price, 0)) * (i.quantity || 1), 0) },
+          items: updatedSess.items,
+          paymentMethod: pay,
+          paymentStatus: "PendingDeliveryFee",
+        });
+        await newOrder.save();
+        console.log(`🛵 Delivery order ${newOrder._id} saved – waiting for employee to set fee`);
+        updateSession(phone, { step: "CONFIRMAR", pendingOrderId: String(newOrder._id) });
+        await sendWhatsAppReply(
+          from,
+          `✅ Pedido recebido!\n\n${itens}\n\n🏠 Entrega em: ${updatedSess.address}\n💳 ${pay}\n\n⏳ Estamos a calcular a taxa de entrega. Em breve enviamos o total final para confirmar!`,
+          sessionId
+        );
+      } catch (err) {
+        console.error("Erro ao guardar pedido delivery:", err);
+        await sendWhatsAppReply(from, "Houve um problema ao registar o pedido. Tente novamente.", sessionId);
+      }
+      return true;
+    }
+
+    // Non‑delivery: normal confirm flow
+    updateSession(phone, { payment: pay, step: "CONFIRMAR" });
+    const updatedSess = getSession(phone);
+    const { total, tipo, itens } = buildOrderSummary(updatedSess);
     await sendWhatsAppReply(from, `📝 Resumo do pedido:\n\n${itens}\n\n🏷️ ${tipo}\n💳 ${pay}\n💰 Total: R$ ${total.toFixed(2)}\n\nConfirma? (sim / não)`, sessionId);
     return true;
   },
+
+  // ── PERGUNTAR_TROCO ──────────────────────────────────────────────────────
+  async PERGUNTAR_TROCO(ctx) {
+    const { phone, from, rawMessage, sessionId } = ctx;
+    const pos = ["sim", "s", "quero", "preciso", "sim sim", "yes", "vai"];
+    const neg = ["nao", "não", "n", "nao precisa", "não precisa"];
+    const msg = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+
+    if (pos.some((p) => msg.includes(p))) {
+      updateSession(phone, { changeNeeded: true, step: "PERGUNTAR_VALOR_TROCO" });
+      await sendWhatsAppReply(from, "💵 Troco para quanto? (ex: 20)", sessionId);
+      return true;
+    } else if (neg.some((n) => msg.includes(n))) {
+      updateSession(phone, { changeNeeded: false, changeFor: 0, step: "AGUARDAR_TAXA" });
+      // Save delivery order with no change
+      const sess = getSession(phone);
+      const { itens } = buildOrderSummary(sess);
+      try {
+        const newOrder = new Order({
+          customerDetails: { name: ctx.contact?.name || "Cliente WhatsApp", phone, guests: 1 },
+          orderType: "Delivery",
+          deliveryAddress: sess.address,
+          whatsappChatId: from,
+          table: null,
+          isStanding: false,
+          orderStatus: "Pending",
+          bills: { total: sess.items.reduce((s, i) => s + (i.price + (i.additions || []).reduce((a, b) => a + b.price, 0)) * (i.quantity || 1), 0), tax: 0, totalWithTax: sess.items.reduce((s, i) => s + (i.price + (i.additions || []).reduce((a, b) => a + b.price, 0)) * (i.quantity || 1), 0) },
+          items: sess.items,
+          paymentMethod: "Dinheiro",
+          paymentStatus: "PendingDeliveryFee",
+          changeNeeded: false,
+          changeFor: 0,
+        });
+        await newOrder.save();
+        updateSession(phone, { step: "CONFIRMAR", pendingOrderId: String(newOrder._id) });
+        await sendWhatsAppReply(from, `✅ Pedido recebido sem troco!\n\n${itens}\n\n🏠 Entrega em: ${sess.address}\n💳 Dinheiro\n\n⏳ Taxa de entrega será confirmada em breve.`, sessionId);
+      } catch (err) {
+        console.error("Erro ao guardar pedido delivery:", err);
+        await sendWhatsAppReply(from, "Houve um problema ao registar o pedido. Tente novamente.", sessionId);
+      }
+      return true;
+    } else {
+      await sendWhatsAppReply(from, "Por favor, responda *sim* ou *não*.", sessionId);
+      return true;
+    }
+  },
+
+  // ── PERGUNTAR_VALOR_TROCO ───────────────────────────────────────────────
+  async PERGUNTAR_VALOR_TROCO(ctx) {
+    const { phone, from, rawMessage, sessionId } = ctx;
+    // Simple number extraction
+    const numMatch = rawMessage.match(/\d+/);
+    const num = numMatch ? parseInt(numMatch[0], 10) : null;
+
+    if (num !== null && num > 0) {
+      updateSession(phone, { changeFor: num, step: "AGUARDAR_TAXA" });
+      const sess = getSession(phone);
+      const { itens } = buildOrderSummary(sess);
+      try {
+        const newOrder = new Order({
+          customerDetails: { name: ctx.contact?.name || "Cliente WhatsApp", phone, guests: 1 },
+          orderType: "Delivery",
+          deliveryAddress: sess.address,
+          whatsappChatId: from,
+          table: null,
+          isStanding: false,
+          orderStatus: "Pending",
+          bills: { total: sess.items.reduce((s, i) => s + (i.price + (i.additions || []).reduce((a, b) => a + b.price, 0)) * (i.quantity || 1), 0), tax: 0, totalWithTax: sess.items.reduce((s, i) => s + (i.price + (i.additions || []).reduce((a, b) => a + b.price, 0)) * (i.quantity || 1), 0) },
+          items: sess.items,
+          paymentMethod: "Dinheiro",
+          paymentStatus: "PendingDeliveryFee",
+          changeNeeded: true,
+          changeFor: num,
+        });
+        await newOrder.save();
+        updateSession(phone, { step: "CONFIRMAR", pendingOrderId: String(newOrder._id) });
+        await sendWhatsAppReply(from, `✅ Pedido recebido! Troco para R$ ${num.toFixed(2)}\n\n${itens}\n\n🏠 Entrega em: ${sess.address}\n💳 Dinheiro\n\n⏳ Taxa de entrega será confirmada em breve.`, sessionId);
+      } catch (err) {
+        console.error("Erro ao guardar pedido delivery:", err);
+        await sendWhatsAppReply(from, "Houve um problema ao registar o pedido. Tente novamente.", sessionId);
+      }
+      return true;
+    } else {
+      await sendWhatsAppReply(from, "Não entendi o valor. Pode enviar apenas o número (ex: 20).", sessionId);
+      return true;
+    }
+  },
+
+  // ── PERGUNTAR_ADICIONAL ──────────────────────────────────────────────────
+  async PERGUNTAR_ADICIONAL(ctx) {
+    const { phone, from, rawMessage, sessionId, session } = ctx;
+    const aliasInfo = session.pendingAdditionAlias;
+    if (!aliasInfo) {
+      // Should not happen, but reset
+      updateSession(phone, { step: "RECEBER_ITENS" });
+      return false;
+    }
+
+    const choice = rawMessage.trim();
+    let chosenOption = null;
+    if (/^\d+$/.test(choice)) {
+      const idx = parseInt(choice, 10) - 1;
+      if (idx >= 0 && idx < aliasInfo.options.length) {
+        chosenOption = aliasInfo.options[idx];
+      }
+    } else {
+      const normalizedChoice = choice.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      chosenOption = aliasInfo.options.find(opt =>
+        opt.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().includes(normalizedChoice)
+      );
+    }
+
+    if (!chosenOption) {
+      const optionList = aliasInfo.options
+        .map((opt, i) => `${i + 1} - ${opt.name}`)
+        .join("\n");
+      await sendWhatsAppReply(from, `Desculpe, não encontrei essa opção. Escolha uma das seguintes:\n${optionList}`, sessionId);
+      return true;
+    }
+
+    // Attach the chosen addition to the last item (most reasonable)
+    const items = session.items || [];
+    if (items.length === 0) {
+      await sendWhatsAppReply(from, "Não encontrei nenhum item para adicionar. Por favor, refaça o pedido.", sessionId);
+      clearSession(phone);
+      return true;
+    }
+
+    const targetItem = items[items.length - 1];
+    if (!targetItem.additions) targetItem.additions = [];
+    targetItem.additions.push({ name: chosenOption.name, price: chosenOption.price });
+
+    // Clear pending addition and continue the normal flow
+    updateSession(phone, {
+      step: "RECEBER_ITENS",
+      items: items,
+      pendingAdditionAlias: null,
+      skipParsing: true,
+    });
+    await sendWhatsAppReply(from, `✅ Adicionado: ${chosenOption.name}`, sessionId);
+    return false;
+  },
+
+  // ── AGUARDAR_TAXA ─────────────────────────────────────────────────────────
+  async AGUARDAR_TAXA(ctx) {
+    const { from, sessionId } = ctx;
+    await sendWhatsAppReply(from, "⏳ O seu pedido já foi recebido! Estamos a calcular a taxa de entrega e enviamos o total em breve.", sessionId);
+    return true;
+  },
+
 
   // ── CONFIRMAR ────────────────────────────────────────────────────────────
   async CONFIRMAR(ctx) {
@@ -450,8 +724,38 @@ const stepHandlers = {
 
     if (cl?.confirmado === true) {
       const sess = getSession(phone);
-      const { total } = buildOrderSummary(sess);
+
+      // Delivery path: order already exists in DB
+      if (sess.pendingOrderId) {
+        try {
+          const existingOrder = await Order.findById(sess.pendingOrderId);
+          if (existingOrder) {
+            existingOrder.orderStatus = "Pending";
+            await existingOrder.save();
+
+            // Build base confirmation message
+            let confirmMsg = `✅ Pedido #${String(existingOrder._id).slice(-6)} confirmado! Já estamos preparando. Obrigado pela preferência! 🍔`;
+
+            // Append Pix key if payment method is Pix
+            if (existingOrder.paymentMethod === "Pix") {
+              confirmMsg += "\n\n ❖Chave Pix: 000.00.000-00\n👤 Person";
+            }
+
+            await sendWhatsAppReply(from, confirmMsg, sessionId);
+          } else {
+            await sendWhatsAppReply(from, "Não encontrei o pedido. Por favor, tente novamente.", sessionId);
+          }
+        } catch (err) {
+          console.error("Erro ao confirmar pedido delivery:", err);
+          await sendWhatsAppReply(from, "Houve um problema ao confirmar. Tente novamente.", sessionId);
+        }
+        clearSession(phone);
+        return true;
+      }
+
+      // Normal path (Takeaway / Dine-in): create order from session
       try {
+        const { total } = buildOrderSummary(sess);
         const newOrder = new Order({
           customerDetails: { name: contact?.name || "Cliente WhatsApp", phone, guests: 1 },
           orderType: sess.orderType || "Takeaway",
@@ -465,14 +769,24 @@ const stepHandlers = {
           paymentStatus: "Pending",
         });
         await newOrder.save();
-        await sendWhatsAppReply(from, `✅ Pedido #${String(newOrder._id).slice(-6)} confirmado! Já estamos preparando. Obrigado pela preferência! 🍔`, sessionId);
+
+        // Build base confirmation message
+        let confirmMsg = `✅ Pedido #${String(newOrder._id).slice(-6)} confirmado! Já estamos preparando. Obrigado pela preferência! 🍔`;
+
+        // Append Pix key if payment method is Pix
+        if (newOrder.paymentMethod === "Pix") {
+          confirmMsg += "\n\n💳 Chave Pix: 019.715.056-09\n👤 JOÃO PEDRO LOPES BRITO";
+        }
+
+        await sendWhatsAppReply(from, confirmMsg, sessionId);
       } catch (err) {
         console.error("Erro ao criar pedido:", err);
         await sendWhatsAppReply(from, "Houve um problema ao criar o seu pedido. Por favor, tente novamente.", sessionId);
       }
       clearSession(phone);
+
     } else if (cl?.confirmado === false) {
-      updateSession(phone, { step: "RECEBER_ITENS", items: [], orderType: null, address: "", payment: null, pendingItems: null, skipParsing: false });
+      updateSession(phone, { step: "RECEBER_ITENS", items: [], orderType: null, address: "", payment: null, pendingItems: null, skipParsing: false, pendingOrderId: null });
       await sendWhatsAppReply(from, "Sem problema! 😊 O que gostaria de alterar? Pode me enviar o novo pedido.", sessionId);
     } else {
       await sendWhatsAppReply(from, "Por favor, responda *sim* para confirmar ou *não* para alterar o pedido.", sessionId);
@@ -500,15 +814,11 @@ router.post("/webhook", async (req, res) => {
     console.log(`📩 WhatsApp de ${contact?.name || phone}: "${rawMessage}"`);
     await sendTyping(from, sessionId);
 
-    // ---- Casual / greeting intercept ----
-    const casualReply = getCasualReply(rawMessage);
-    if (casualReply) {
-      if (casualReply === "cardapio") {
-        const sent = await sendMenuImage(from, sessionId);
-        if (!sent) await sendWhatsAppReply(from, "Desculpe, não consegui enviar a imagem do cardápio agora. Tente novamente em instantes! 🙏", sessionId);
-      } else {
-        await sendWhatsAppReply(from, casualReply, sessionId);
-      }
+    // ---- Cardápio (menu image) – still handled early ----
+    const lowerMsg = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    if (lowerMsg.includes("cardapio") || lowerMsg.includes("menu")) {
+      const sent = await sendMenuImage(from, sessionId);
+      if (!sent) await sendWhatsAppReply(from, "Desculpe, não consegui enviar a imagem do cardápio agora. Tente novamente em instantes! 🙏", sessionId);
       return res.json({ status: "ok" });
     }
 
@@ -519,12 +829,11 @@ router.post("/webhook", async (req, res) => {
       return res.json({ status: "cancelled" });
     }
 
-    // ---- Build context object for step handlers ----
+    // ---- State machine ----
     let session = getSession(phone);
     const ctx = { phone, from, rawMessage, sessionId, session, contact };
 
-    // ---- State machine: run the current step handler, then fall through if needed ----
-    const stepsToRun = [session.step, "RECEBER_ITENS"];
+    const stepsToRun = [session.step, "RECEBER_ITENS", "PERGUNTAR_TROCO", "PERGUNTAR_VALOR_TROCO", "PERGUNTAR_ADICIONAL"];
     const visited = new Set();
 
     for (const step of stepsToRun) {
@@ -534,7 +843,6 @@ router.post("/webhook", async (req, res) => {
       const handler = stepHandlers[step];
       if (!handler) break;
 
-      // Refresh session before each handler (it may have been updated by prior handler)
       ctx.session = getSession(phone);
       const handled = await handler(ctx);
       if (handled) break;

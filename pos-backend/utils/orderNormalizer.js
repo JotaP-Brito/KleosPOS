@@ -29,7 +29,12 @@ function normalizeOrderText(text) {
     .replace(/\b(macarrao)\s+(na|a|ao)\s+(chapa)\b/gi, "$1 $3")
     .replace(/\b(macarrao)\s+(na|a|ao)\s+(bolonhesa)\b/gi, "$1 $3");
 
-  // ❌ NO default size – we want explicit sizes only
+  // ---------- drink brand normalization ----------
+  // Remove "antartica" between "guarana" and container/size
+  result = result
+    .replace(/\b(guarana)\s+antartica\s+(lata|2l|1l|600ml|350ml|litro|litros)\b/g, "$1 $2")
+    // Also handle inverted order: "antartica guarana" -> "guarana"
+    .replace(/\bantartica\s+(guarana)\b/g, "$1");
 
   // ---------- product slang ----------
   result = result

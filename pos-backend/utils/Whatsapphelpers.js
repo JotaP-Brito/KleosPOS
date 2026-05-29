@@ -34,7 +34,7 @@ function extractOrderType(msg) {
 // ─────────────────────────────────────────────
 function extractPayment(msg) {
   const lower = norm(msg);
-  if (lower.includes("pix")) return "Pix";
+  if (lower.includes("pix")) return "Pix" ;
   if (lower.includes("cartao") || lower.includes("cartão")) return "Cartão";
   if (lower.includes("dinheiro")) return "Dinheiro";
   return null;
@@ -73,8 +73,8 @@ function extractMacarraoParts(msg) {
   const type = lower.includes("chapa")
     ? "chapa"
     : lower.includes("bolonhesa")
-    ? "bolonhesa"
-    : null;
+      ? "bolonhesa"
+      : null;
   const size = /\b(p|g)\b/.test(lower) ? lower.match(/\b(p|g)\b/)[0] : null;
   return { type, size };
 }
@@ -123,21 +123,79 @@ function classifyStep(step, message) {
 function getCasualReply(msg) {
   const lower = norm(msg);
   if (lower.includes("como") && /(vai|esta|estas|ta|tas|tao|vao|passando|passa|anda)\b/.test(lower))
-    return "Estou ótimo, obrigado! 🍔 Como posso ajudar? Faça o seu pedido e eu trato de tudo!";
+    return "Estou ótimo, obrigado! 🍔Envie seu pedido em uma única mensagem e eu anoto tudo!";
   if (lower.match(/tudo bem|tudo certo|tudo joia|tranquilo|beleza|salve|fala/))
-    return "Estou ótimo, obrigado! 🍔 Como posso ajudar? Faça o seu pedido e eu trato de tudo!";
+    return "Estou ótimo, obrigado! 🍔Envie seu pedido em uma única mensagem e eu anoto tudo!";
   if (lower.includes("cardapio") || lower.includes("menu")) return "cardapio";
   if (lower.includes("preco") || lower.includes("quanto") || lower.includes("custa"))
-    return "Os preços variam conforme o item. Pode consultar o cardápio ou pedir diretamente que eu informo o total!";
+    return "cardapio";
   if (lower.includes("horario") || lower.includes("abre") || lower.includes("fecha"))
-    return "Estamos abertos todos os dias das 18h às 23h.";
+    return "Estamos abertos de segunda à sexta das 18h às 23h.";
   if (lower.match(/bom dia|boa tarde|boa noite|oi|ola|oii|hey/))
-    return "Olá! 🍔 Como posso ajudar? Faça o seu pedido e eu trato de tudo!";
+    return "Olá! 🍔 Envie seu pedido em uma única mensagem e eu anoto tudo!";
+  return null;
+}
+
+// ─────────────────────────────────────────────
+// Extract a whole number from a message (for troco value)
+// ─────────────────────────────────────────────
+function extractNumber(text) {
+  const cleaned = text.replace(/[.,]/g, "");   // remove dots/commas
+  const match = cleaned.match(/\d+/);
+  return match ? parseInt(match[0], 10) : null;
+}
+// ─────────────────────────────────────────────
+// Addition aliases – map vague words to concrete addition options
+// ─────────────────────────────────────────────
+const ADDITION_ALIASES = {
+  bife: {
+    category: "carne",
+    options: [
+      { name: "Carne 120g Picanha", price: 12.0 },   // use the actual prices from your DB
+      { name: "Carne 90g", price: 8.0 }
+    ]
+  },
+  // Add more aliases here as needed, e.g.:
+  // 'cheddar': { category: 'queijo', options: [...] }
+};
+
+/**
+ * Checks if a word (after normalization) is an addition alias.
+ * Returns the alias info (category, options) or null.
+ */
+function getAdditionAlias(word) {
+  const normalized = word.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return ADDITION_ALIASES[normalized] || null;
+}
+
+/**
+ * Scans the raw message for any word that matches an addition alias
+ * and has NOT already been consumed (i.e., not part of a product or a known addition).
+ * Returns the first alias info found, or null.
+ */
+function detectUnknownAddition(rawMessage, usedWordsSet) {
+  const words = rawMessage
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ");
+
+  for (const word of words) {
+    if (usedWordsSet && usedWordsSet.has(word)) continue;
+    const alias = getAdditionAlias(word);
+    if (alias) {
+      return { aliasWord: word, ...alias };
+    }
+  }
   return null;
 }
 
 // ─────────────────────────────────────────────
 // Order summary builder (used in CONFIRMAR + PERGUNTAR_PAGAMENTO)
+// ✅ NOW INCLUDES OBSERVATION TEXT
 // ─────────────────────────────────────────────
 function buildOrderSummary(sess) {
   const total = sess.items.reduce((sum, item) => {
@@ -149,18 +207,26 @@ function buildOrderSummary(sess) {
     sess.orderType === "Dine-in"
       ? "No local (Em pé)"
       : sess.orderType === "Delivery"
-      ? `Entrega em ${sess.address || "?"}`
-      : "Para levar";
+        ? `Entrega em ${sess.address || "?"}`
+        : "Para levar";
 
   const itens = sess.items
     .map((i) => {
       let line = `${i.quantity}x ${i.name}`;
       if (i.additions?.length) line += ` (+ ${i.additions.map((a) => a.name).join(", ")})`;
+      // 🆕 Show observation (e.g. "sem salada") if present
+      if (i.observation) line += ` [${i.observation}]`;
       return line;
     })
     .join("\n");
 
-  return { total, tipo, itens };
+  // Include troco info if applicable
+  let trocoLine = "";
+  if (sess.changeNeeded && sess.changeFor > 0) {
+    trocoLine = `\n🪙 Troco para: R$ ${sess.changeFor.toFixed(2)}`;
+  }
+
+  return { total, tipo, itens: itens + trocoLine };
 }
 
 module.exports = {
@@ -173,4 +239,8 @@ module.exports = {
   classifyStep,
   getCasualReply,
   buildOrderSummary,
+  extractNumber,
+  getAdditionAlias,
+  detectUnknownAddition,
+  ADDITION_ALIASES,   
 };
