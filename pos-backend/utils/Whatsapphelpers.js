@@ -134,6 +134,8 @@ function getCasualReply(msg) {
   if (lower.match(/bom dia|boa tarde|boa noite|oi|ola|oii|hey/))
     return "Olá! 🍔 Envie seu pedido em uma única mensagem e eu anoto tudo!";
   return null;
+  if (lower.includes("atendendo") || lower.includes("funcionando") || lower.includes(abertos))
+    return "Sim! Envie seu pedido em uma única mensagem e eu anoto tudo!";
 }
 
 // ─────────────────────────────────────────────

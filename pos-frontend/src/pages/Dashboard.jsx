@@ -3,6 +3,7 @@ import { MdTableBar, MdCategory } from "react-icons/md";
 import { BiSolidDish } from "react-icons/bi";
 import { MdPlaylistAdd } from "react-icons/md";
 import { FiBarChart2 } from "react-icons/fi";   // ícone para o relatório
+import { RiRobot2Line } from "react-icons/ri";    // ícone para o bot
 import { useNavigate } from "react-router-dom";
 import Metrics from "../components/dashboard/Metrics";
 import RecentOrders from "../components/dashboard/RecentOrders";
@@ -32,6 +33,25 @@ const Dashboard = () => {
   useEffect(() => {
     document.title = "POS | Painel Admin";
   }, []);
+
+  // 🆕 Bot on/off state
+  const [isBotActive, setIsBotActive] = useState(true);
+  useEffect(() => {
+    // Fetch initial bot status
+    axiosWrapper.get("/bot-status")
+      .then(res => setIsBotActive(res.data.active))
+      .catch(() => setIsBotActive(true));
+  }, []);
+
+  const toggleBot = async () => {
+    try {
+      const res = await axiosWrapper.post("/bot-status/toggle", { active: !isBotActive });
+      setIsBotActive(res.data.active);
+      enqueueSnackbar(`Bot ${res.data.active ? "ativado" : "desativado"}!`, { variant: "success" });
+    } catch (error) {
+      enqueueSnackbar("Erro ao alternar bot", { variant: "error" });
+    }
+  };
 
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
   const [isDishModalOpen, setIsDishModalOpen] = useState(false);
@@ -83,6 +103,19 @@ const Dashboard = () => {
           >
             <FiBarChart2 />
             Relatório de Itens
+          </button>
+
+          {/* 🆕 Bot on/off toggle */}
+          <button
+            onClick={toggleBot}
+            className={`px-8 py-3 rounded-lg font-semibold text-md flex items-center gap-2 ${
+              isBotActive
+                ? "bg-green-600 hover:bg-green-700 text-white"
+                : "bg-red-600 hover:bg-red-700 text-white"
+            }`}
+          >
+            <RiRobot2Line />
+            {isBotActive ? "Bot Online" : "Bot Offline"}
           </button>
 
           {/* Botão de encerrar dia */}

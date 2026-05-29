@@ -6,7 +6,13 @@ const axios = require("axios");
 const Order = require("../models/orderModel");
 const { parseWhatsAppOrderWithLLM } = require("../utils/llmParser");   // kept for future use
 const { parseOrderByKeywords } = require("../utils/keywordParser");
-const { getSession, updateSession, clearSession } = require("../utils/sessionManager");
+const {
+  getSession,
+  updateSession,
+  clearSession,
+  muteSession,      // 🆕
+  unmuteSession,    // 🆕
+} = require("../utils/sessionManager");
 const { getMenuData } = require("../utils/menuCache");
 const { normalizeOrderText } = require("../utils/orderNormalizer");
 const {
@@ -18,10 +24,10 @@ const {
   classifyStep,
   getCasualReply,
   buildOrderSummary,
-  getAdditionAlias,          // 🆕 for bife/alias detection
-  detectUnknownAddition,     // 🆕 scans raw message for aliases
+  getAdditionAlias,
+  detectUnknownAddition,
 } = require("../utils/whatsappHelpers");
-
+const botStatusRoute = require("../routes/botStatusRoute");
 const router = express.Router();
 
 // ─────────────────────────────────────────────
@@ -88,7 +94,6 @@ async function sendWhatsAppReply(chatId, text, sessionId) {
 async function sendMenuImage(chatId, sessionId) {
   try {
     const sid = sessionId || "default";
-    // ✅ URL from .env (add MENU_IMAGE_URL=http://... to your .env file)
     const imageUrl = process.env.MENU_IMAGE_URL || "http://localhost:3000/public/images/cardapio.jpeg";
 
     await axios.post(
@@ -233,7 +238,6 @@ const stepHandlers = {
     const parsed = parseOrderByKeywords(orderMsg, products, additions);
 
     if (parsed && parsed.items.length > 0) {
-      // Mark that the keyword parser already attached additions & observations
       parsed.byKeyword = true;
 
       const lowerRaw = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -254,7 +258,7 @@ const stepHandlers = {
       if (extAddr && extType === "Delivery") updates.address = extAddr;
       if (extPay) updates.payment = extPay;
       updateSession(phone, updates);
-      return false; // fall through to RECEBER_ITENS
+      return false;
     }
 
     const lowerRaw = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -281,7 +285,7 @@ const stepHandlers = {
       parsed = parseOrderByKeywords(orderMsg, products, additions);
 
       if (parsed && parsed.items.length > 0) {
-        parsed.byKeyword = true;   // keyword parser already handled additions
+        parsed.byKeyword = true;
       } else {
         // ── LLM fallback – NOT IN USE, kept for future ──
         // console.log("Keyword parser found nothing, trying LLM…");
@@ -308,7 +312,6 @@ const stepHandlers = {
         }
         return true;
       }
-      // Fallback: reply with a casual message or the greeting
       const casual = getCasualReply(rawMessage);
       const fallback = casual || "Desculpe, não consegui entender. Pode tentar '2 X-Bacon, 1 Coca'?";
       await sendWhatsAppReply(from, fallback, sessionId);
@@ -333,25 +336,21 @@ const stepHandlers = {
       return true;
     }
 
-    // Enrich LLM items (no price) from menu – only if not already priced
     parsed.items = parsed.items.map((item) => {
       if (item.price != null && item.price > 0) return item;
       const match = products.find((p) => p.name.toLowerCase() === item.name.toLowerCase());
       return { ...item, price: match ? match.price : 0 };
     });
 
-    // ✅ Fuzzy additions ONLY for LLM results (keyword parser already did it)
     if (!parsed.byKeyword) {
       parsed.items = enrichWithAdditions(parsed.items, rawMessage, products, additions);
     }
 
-    // ── Build the initial order items list ──
     let orderItems = parsed.items.map((item) => ({
       name: item.name, price: item.price || 0, quantity: item.quantity || 1,
       observation: item.observation || "", additions: item.additions || [],
     }));
 
-    // ── FIX: split items when a "sem" quantity is given (e.g., "2 laçador, 1 sem bacon") ──
     const finalItems = [];
     for (const item of orderItems) {
       if (!item.observation) {
@@ -359,7 +358,6 @@ const stepHandlers = {
         continue;
       }
 
-      // Try to find a pattern like "1 sem bacon" in the original message
       const obsLower = item.observation.toLowerCase();
       const semMatch = obsLower.match(/sem\s+(\w+)/);
       if (!semMatch) {
@@ -367,38 +365,33 @@ const stepHandlers = {
         continue;
       }
 
-      const ingredient = semMatch[1]; // e.g., "bacon"
+      const ingredient = semMatch[1];
       const rawLower = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-      // Look for a number immediately before "sem" in the original message
       const splitPattern = new RegExp(`(\\d+)\\s*sem\\s+${ingredient}`, 'i');
       const splitMatch = rawLower.match(splitPattern);
 
       if (splitMatch) {
         const splitQuantity = parseInt(splitMatch[1], 10);
         if (splitQuantity > 0 && item.quantity > splitQuantity) {
-          // Create the "sem" item with the split quantity
           finalItems.push({
             ...item,
             quantity: splitQuantity,
             observation: `Sem ${ingredient}`,
           });
 
-          // The remaining items without the observation
           finalItems.push({
             ...item,
             quantity: item.quantity - splitQuantity,
             observation: "",
           });
-          continue; // do not add the original merged item
+          continue;
         }
       }
 
-      // Fallback: keep the original item (observation applies to all)
       finalItems.push(item);
     }
 
-    // ── Check for unknown addition aliases (e.g., "bife") ──
     const usedWords = new Set();
     for (const item of parsed.items) {
       const nameWords = item.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(" ");
@@ -410,7 +403,6 @@ const stepHandlers = {
         });
       }
     }
-    // Also mark words from observations (like "bacon") as used
     finalItems.forEach(item => {
       if (item.observation) {
         item.observation.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().split(" ").forEach(w => usedWords.add(w));
@@ -425,7 +417,7 @@ const stepHandlers = {
       updateSession(phone, {
         step: "PERGUNTAR_ADICIONAL",
         pendingAdditionAlias: unknownAddition,
-        items: finalItems,   // keep the items already built
+        items: finalItems,
       });
       await sendWhatsAppReply(
         from,
@@ -435,7 +427,6 @@ const stepHandlers = {
       return true;
     }
 
-    // ── Continue with the normal flow ──
     const updates = { items: finalItems };
     const sess0 = getSession(phone);
     if (!sess0.orderType) {
@@ -468,7 +459,6 @@ const stepHandlers = {
       updateSession(phone, { step: "PERGUNTAR_TIPO" });
       await sendWhatsAppReply(from, "📋 Itens registados! Como deseja receber o pedido?\n1️⃣ Para levar\n2️⃣ Entrega\n3️⃣ No local", sessionId);
     } else if (needAddr && !hasAddr) {
-      // Simplified address flow: accept full message
       updateSession(phone, { step: "PERGUNTAR_PAGAMENTO", address: rawMessage.trim() });
       await sendWhatsAppReply(from, "💳 Qual a forma de pagamento? (Dinheiro, Cartão ou Pix)", sessionId);
     } else if (!hasPayment) {
@@ -500,7 +490,6 @@ const stepHandlers = {
   // ── PERGUNTAR_MORADA ─────────────────────────────────────────────────────
   async PERGUNTAR_MORADA(ctx) {
     const { phone, from, rawMessage, sessionId } = ctx;
-    // Simplified: accept the full message as address
     const addr = rawMessage.trim();
     updateSession(phone, { step: "PERGUNTAR_PAGAMENTO", address: addr });
     await sendWhatsAppReply(from, "💳 Qual a forma de pagamento? (Dinheiro, Cartão ou Pix)", sessionId);
@@ -518,7 +507,6 @@ const stepHandlers = {
     const sess = getSession(phone);
     const isDelivery = sess.orderType === "Delivery";
 
-    // ── Delivery + Dinheiro: ask for change ──
     if (isDelivery && pay === "Dinheiro") {
       updateSession(phone, { payment: pay, step: "PERGUNTAR_TROCO" });
       await sendWhatsAppReply(from, "💵 Vai precisar de troco? (sim / não)", sessionId);
@@ -526,7 +514,6 @@ const stepHandlers = {
     }
 
     if (isDelivery) {
-      // Delivery non‑cash: save immediately
       updateSession(phone, { payment: pay, step: "AGUARDAR_TAXA" });
       const updatedSess = getSession(phone);
       const { itens } = buildOrderSummary(updatedSess);
@@ -559,7 +546,6 @@ const stepHandlers = {
       return true;
     }
 
-    // Non‑delivery: normal confirm flow
     updateSession(phone, { payment: pay, step: "CONFIRMAR" });
     const updatedSess = getSession(phone);
     const { total, tipo, itens } = buildOrderSummary(updatedSess);
@@ -580,7 +566,6 @@ const stepHandlers = {
       return true;
     } else if (neg.some((n) => msg.includes(n))) {
       updateSession(phone, { changeNeeded: false, changeFor: 0, step: "AGUARDAR_TAXA" });
-      // Save delivery order with no change
       const sess = getSession(phone);
       const { itens } = buildOrderSummary(sess);
       try {
@@ -616,7 +601,6 @@ const stepHandlers = {
   // ── PERGUNTAR_VALOR_TROCO ───────────────────────────────────────────────
   async PERGUNTAR_VALOR_TROCO(ctx) {
     const { phone, from, rawMessage, sessionId } = ctx;
-    // Simple number extraction
     const numMatch = rawMessage.match(/\d+/);
     const num = numMatch ? parseInt(numMatch[0], 10) : null;
 
@@ -659,7 +643,6 @@ const stepHandlers = {
     const { phone, from, rawMessage, sessionId, session } = ctx;
     const aliasInfo = session.pendingAdditionAlias;
     if (!aliasInfo) {
-      // Should not happen, but reset
       updateSession(phone, { step: "RECEBER_ITENS" });
       return false;
     }
@@ -686,7 +669,6 @@ const stepHandlers = {
       return true;
     }
 
-    // Attach the chosen addition to the last item (most reasonable)
     const items = session.items || [];
     if (items.length === 0) {
       await sendWhatsAppReply(from, "Não encontrei nenhum item para adicionar. Por favor, refaça o pedido.", sessionId);
@@ -698,7 +680,6 @@ const stepHandlers = {
     if (!targetItem.additions) targetItem.additions = [];
     targetItem.additions.push({ name: chosenOption.name, price: chosenOption.price });
 
-    // Clear pending addition and continue the normal flow
     updateSession(phone, {
       step: "RECEBER_ITENS",
       items: items,
@@ -716,6 +697,13 @@ const stepHandlers = {
     return true;
   },
 
+  // ── ENCERRAR (handoff to human) ─────────────────────────────────────────
+  async ENCERRAR(ctx) {
+    const { phone, from, sessionId } = ctx;
+    await sendWhatsAppReply(from, "Certo! Um atendente vai conversar com você, aguarde um instante. 👩‍🍳", sessionId);
+    muteSession(phone);
+    return true;
+  },
 
   // ── CONFIRMAR ────────────────────────────────────────────────────────────
   async CONFIRMAR(ctx) {
@@ -733,10 +721,8 @@ const stepHandlers = {
             existingOrder.orderStatus = "Pending";
             await existingOrder.save();
 
-            // Build base confirmation message
             let confirmMsg = `✅ Pedido #${String(existingOrder._id).slice(-6)} confirmado! Já estamos preparando. Obrigado pela preferência! 🍔`;
 
-            // Append Pix key if payment method is Pix
             if (existingOrder.paymentMethod === "Pix") {
               confirmMsg += "\n\n ❖Chave Pix: 000.00.000-00\n👤 Person";
             }
@@ -749,7 +735,7 @@ const stepHandlers = {
           console.error("Erro ao confirmar pedido delivery:", err);
           await sendWhatsAppReply(from, "Houve um problema ao confirmar. Tente novamente.", sessionId);
         }
-        clearSession(phone);
+        muteSession(phone);
         return true;
       }
 
@@ -770,10 +756,8 @@ const stepHandlers = {
         });
         await newOrder.save();
 
-        // Build base confirmation message
         let confirmMsg = `✅ Pedido #${String(newOrder._id).slice(-6)} confirmado! Já estamos preparando. Obrigado pela preferência! 🍔`;
 
-        // Append Pix key if payment method is Pix
         if (newOrder.paymentMethod === "Pix") {
           confirmMsg += "\n\n💳 Chave Pix: 000.000.000\n👤 Person";
         }
@@ -783,11 +767,14 @@ const stepHandlers = {
         console.error("Erro ao criar pedido:", err);
         await sendWhatsAppReply(from, "Houve um problema ao criar o seu pedido. Por favor, tente novamente.", sessionId);
       }
-      clearSession(phone);
+      muteSession(phone);
 
     } else if (cl?.confirmado === false) {
-      updateSession(phone, { step: "RECEBER_ITENS", items: [], orderType: null, address: "", payment: null, pendingItems: null, skipParsing: false, pendingOrderId: null });
-      await sendWhatsAppReply(from, "Sem problema! 😊 O que gostaria de alterar? Pode me enviar o novo pedido.", sessionId);
+      // ── Handoff to human ──
+      // Call the handoff directly (don't rely on state machine fallthrough)
+      await sendWhatsAppReply(from, "Certo! Um atendente vai conversar com você, aguarde um instante. 👩‍🍳", sessionId);
+      muteSession(phone);
+      return true;
     } else {
       await sendWhatsAppReply(from, "Por favor, responda *sim* para confirmar ou *não* para alterar o pedido.", sessionId);
     }
@@ -829,11 +816,33 @@ router.post("/webhook", async (req, res) => {
       return res.json({ status: "cancelled" });
     }
 
-    // ---- State machine ----
+    // ---- Get current session (the ONLY declaration) ----
     let session = getSession(phone);
+
+    // ---- Bot turned off ----
+    if (!botStatusRoute.isBotActive()) {
+      return res.json({ status: "bot_offline" });
+    }
+
+    // ---- Muted session check (post‑order) ----
+    if (session.muted) {
+      const lowerMsg = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      if (/\b(novo pedido|pedir|quero pedir|fazer pedido|pedido)\b/i.test(lowerMsg)) {
+        unmuteSession(phone);
+        session = getSession(phone);
+      } else {
+        if (!session.muteMessageSent) {
+          await sendWhatsAppReply(from, "✅ Seu pedido foi finalizado. Para fazer um novo pedido, digite *novo pedido*.", sessionId);
+          updateSession(phone, { muteMessageSent: true });
+        }
+        return res.json({ status: "muted" });
+      }
+    }
+
+    // ---- State machine ----
     const ctx = { phone, from, rawMessage, sessionId, session, contact };
 
-    const stepsToRun = [session.step, "RECEBER_ITENS", "PERGUNTAR_TROCO", "PERGUNTAR_VALOR_TROCO", "PERGUNTAR_ADICIONAL"];
+    const stepsToRun = [session.step, "RECEBER_ITENS", "PERGUNTAR_TROCO", "PERGUNTAR_VALOR_TROCO", "PERGUNTAR_ADICIONAL", "ENCERRAR"];
     const visited = new Set();
 
     for (const step of stepsToRun) {

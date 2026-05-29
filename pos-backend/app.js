@@ -60,6 +60,7 @@ app.use("/api/summary", require("./routes/summaryRoute"));
 app.use("/api/addition", require("./routes/additionRoute"));
 app.use("/api/whatsapp", require("./routes/whatsappRoute"));   // 👈 WhatsApp webhook
 app.use("/api/order", require("./routes/deliveryFeeRoute"));
+app.use("/api/bot-status", require("./routes/botStatusRoute"));
 
 // Serve static files from pos-backend/public (menu image, etc.)
 app.use(express.static(path.join(__dirname, "public")));

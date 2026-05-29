@@ -28,6 +28,8 @@ function getSession(phone) {
       pendingItems: null,
       skipParsing: false,
       lastActivity: Date.now(),
+      muted: false,
+      muteMessageSent: false,
     };
   }
 
@@ -46,6 +48,19 @@ function clearSession(phone) {
   delete sessions[phone];
 }
 
+// Mark a session as muted – bot will ignore all messages until re‑activated
+function muteSession(phone) {
+  const session = sessions[phone] || getSession(phone);
+  session.muted = true;
+  session.muteMessageSent = false;   // so we can send a one‑time notice
+  // No need to "set" because we directly modified the object reference
+}
+
+// Re‑activate a muted session (clear all state)
+function unmuteSession(phone) {
+  clearSession(phone);   // resets to INICIO, removes muted flag
+}
+
 // ---- Periodic cleanup: remove dead sessions every 10 minutes ----
 setInterval(() => {
   const now = Date.now();
@@ -59,4 +74,10 @@ setInterval(() => {
   if (cleared > 0) console.log(`🧹 Cleared ${cleared} expired session(s)`);
 }, 10 * 60 * 1000);
 
-module.exports = { getSession, updateSession, clearSession };
+module.exports = {
+  getSession,
+  updateSession,
+  clearSession,
+  muteSession,
+  unmuteSession,
+};
