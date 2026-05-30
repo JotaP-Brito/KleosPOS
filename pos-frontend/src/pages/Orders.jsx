@@ -1,5 +1,5 @@
 // pages/Orders.jsx
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import BottomNav from "../components/shared/BottomNav";
 import OrderCard from "../components/orders/OrderCard";
 import BackButton from "../components/shared/BackButton";
@@ -7,7 +7,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { getOrders } from "../https/index";
 import { enqueueSnackbar } from "notistack";
 import PaymentModal from "../components/orders/PaymentModal";
-import DeliveryFeeModal from "../components/orders/DeliveryFeeModal"; // ✅ NEW
+import DeliveryFeeModal from "../components/orders/DeliveryFeeModal";
 import Invoice from "../components/invoice/Invoice";
 
 const Orders = () => {
@@ -15,7 +15,10 @@ const Orders = () => {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [showPayment, setShowPayment] = useState(false);
   const [showInvoice, setShowInvoice] = useState(false);
-  const [showDeliveryFee, setShowDeliveryFee] = useState(false); // ✅ NEW
+  const [showDeliveryFee, setShowDeliveryFee] = useState(false);
+
+  // 🆕 Prevent modal from re‑opening after manual close
+  const dismissedIdsRef = useRef(new Set());
 
   useEffect(() => {
     document.title = "POS | Pedidos";
@@ -25,7 +28,7 @@ const Orders = () => {
     queryKey: ["orders"],
     queryFn: getOrders,
     placeholderData: keepPreviousData,
-    refetchInterval: 5000, // ✅ poll every 5s so new delivery orders appear automatically
+    refetchInterval: 5000,
   });
 
   if (isError) {
@@ -37,17 +40,20 @@ const Orders = () => {
     (order) => !["Completed", "Cancelled"].includes(order.orderStatus)
   );
 
-  // ✅ Auto-open DeliveryFeeModal when a new PendingDeliveryFee order arrives
+  // ✅ Auto-open DeliveryFeeModal only for un‑dismissed orders
   useEffect(() => {
-    if (showDeliveryFee) return; // don't interrupt an already-open modal
+    if (showDeliveryFee) return;
     const pending = activeOrders.find(
-      (o) => o.orderType === "Delivery" && o.paymentStatus === "PendingDeliveryFee"
+      (o) =>
+        o.orderType === "Delivery" &&
+        o.paymentStatus === "PendingDeliveryFee" &&
+        !dismissedIdsRef.current.has(o._id)
     );
     if (pending) {
       setSelectedOrder(pending);
       setShowDeliveryFee(true);
     }
-  }, [activeOrders]);
+  }, [activeOrders, showDeliveryFee]);
 
   const filteredOrders = activeOrders.filter((order) => {
     if (status === "all") return true;
@@ -66,10 +72,20 @@ const Orders = () => {
     setShowInvoice(true);
   };
 
-  // ✅ Employee manually opens fee modal from the OrderCard button
   const handleShowDeliveryFee = (order) => {
+    // Remove from dismissed set if manually opened
+    dismissedIdsRef.current.delete(order._id);
     setSelectedOrder(order);
     setShowDeliveryFee(true);
+  };
+
+  // 🆕 Close handler that remembers we dismissed this order
+  const closeDeliveryFee = () => {
+    if (selectedOrder) {
+      dismissedIdsRef.current.add(selectedOrder._id);
+    }
+    setShowDeliveryFee(false);
+    setSelectedOrder(null);
   };
 
   return (
@@ -108,7 +124,7 @@ const Orders = () => {
                 order={order}
                 onShowPayment={handleShowPayment}
                 onShowInvoice={handleShowInvoice}
-                onShowDeliveryFee={handleShowDeliveryFee} // ✅ NEW prop
+                onShowDeliveryFee={handleShowDeliveryFee}
               />
             ))
           ) : (
@@ -124,11 +140,10 @@ const Orders = () => {
       {showInvoice && selectedOrder && (
         <Invoice orderInfo={selectedOrder} setShowInvoice={setShowInvoice} />
       )}
-      {/* ✅ NEW: Delivery fee modal */}
       {showDeliveryFee && selectedOrder && (
         <DeliveryFeeModal
           order={selectedOrder}
-          onClose={() => { setShowDeliveryFee(false); setSelectedOrder(null); }}
+          onClose={closeDeliveryFee}   // 🆕 uses the dismissal‑aware close handler
         />
       )}
 

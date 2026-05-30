@@ -140,6 +140,11 @@ function enrichWithAdditions(parsedItems, rawMessage, products, additions) {
   );
   const synonyms = { ovo: "egg", egg: "ovo", queijo: "cheese", cheese: "queijo", presunto: "ham", ham: "presunto" };
 
+  const numberWords = new Set([
+    "um", "uma", "dois", "duas", "tres", "três", "quatro", "cinco", "seis",
+    "sete", "oito", "nove", "dez", "onze", "doze", "treze", "catorze", "quinze",
+  ]);
+
   for (const add of additions) {
     const addNorm = add.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     if (parsedItems.some((item) => (item.additions || []).some((a) => a.name === add.name))) continue;
@@ -149,10 +154,12 @@ function enrichWithAdditions(parsedItems, rawMessage, products, additions) {
     for (let i = 0; i < messageWords.length; i++) {
       const token = messageWords[i];
       if (token.length < 3) continue;
+      if (numberWords.has(token) || /^\d+$/.test(token)) continue;   // 🆕 skip numbers
       const synToken = synonyms[token] || token;
       const dist = Math.min(levenshtein(token, addNorm), levenshtein(synToken, addNorm));
       if (dist <= 2 && dist < bestDist) { bestDist = dist; bestTokenIndex = i; }
     }
+    // … rest unchanged …
     if (bestTokenIndex < 0) continue;
     if (bestTokenIndex > 0 && messageWords[bestTokenIndex - 1] === "sem") continue;
 
@@ -234,14 +241,27 @@ const stepHandlers = {
   async INICIO(ctx) {
     const { phone, from, rawMessage, sessionId } = ctx;
     const { products, additions } = await getMenuData();
-    const orderMsg = normalizeOrderText(rawMessage);
-    const parsed = parseOrderByKeywords(orderMsg, products, additions);
+
+    // 🆕 Split on " e um / e uma" ONLY – keeps inner "e" intact
+    const segments = rawMessage.split(/\s+e\s+(um\s+|uma\s+)/i).filter(s => s.trim());
+    let allItems = [];
+    for (const seg of segments) {
+      const segMsg = seg.trim();
+      if (!segMsg) continue;
+      const segNormalized = normalizeOrderText(segMsg);
+      const parsedSeg = parseOrderByKeywords(segNormalized, products, additions);
+      if (parsedSeg && parsedSeg.items.length > 0) {
+        allItems = allItems.concat(parsedSeg.items);
+      }
+    }
+
+    const parsed = allItems.length > 0 ? { order: true, items: allItems, byKeyword: true } : null;
 
     if (parsed && parsed.items.length > 0) {
-      parsed.byKeyword = true;
+      // (byKeyword is already true from above)
 
       const lowerRaw = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-      const hasMacarraoMention = /\bmacarrao\b/.test(lowerRaw) || /\bmac\b/.test(lowerRaw);
+      const hasMacarraoMention = /\b(macarrao|mac|espaguete|spaghetti|espagueti)\b/.test(lowerRaw);
       const hasMacarraoInItems = parsed.items.some((item) => item.name.toLowerCase().includes("macarrão"));
 
       if (hasMacarraoMention && !hasMacarraoInItems) {
@@ -262,9 +282,21 @@ const stepHandlers = {
     }
 
     const lowerRaw = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-    if (/\bmacarrao\b/.test(lowerRaw) || /\bmac\b/.test(lowerRaw)) {
-      updateSession(phone, { step: "CLARIFICAR_MACARRAO", macarraoType: null, macarraoMissing: "both", pendingItems: [] });
-      await sendWhatsAppReply(from, "Qual tipo de macarrão você gostaria? 🍝\n• Na chapa\n• À bolonhesa", sessionId);
+    // ✅ Also catch espaguete / spaghetti → treated as macarrao
+    if (/\b(macarrao|mac|espaguete|spaghetti|espagueti)\b/.test(lowerRaw)) {
+      // If type is already in the message, pre-fill it
+      const parts = extractMacarraoParts(rawMessage);
+      updateSession(phone, {
+        step: "CLARIFICAR_MACARRAO",
+        macarraoType: parts.type || null,
+        macarraoMissing: parts.type ? "size" : "both",
+        pendingItems: [],
+      });
+      if (parts.type && !parts.size) {
+        await sendWhatsAppReply(from, "E o tamanho? 📏\n• P (pequeno)\n• G (grande)", sessionId);
+      } else {
+        await sendWhatsAppReply(from, "Qual tipo de macarrão você gostaria? 🍝\n• Na chapa\n• À bolonhesa", sessionId);
+      }
       return true;
     }
 
@@ -281,11 +313,21 @@ const stepHandlers = {
     let parsed = null;
 
     if (!session.skipParsing) {
-      const orderMsg = normalizeOrderText(rawMessage);
-      parsed = parseOrderByKeywords(orderMsg, products, additions);
+      // 🆕 Split on " e um / e uma" ONLY
+      const segments = rawMessage.split(/\s+e\s+(um\s+|uma\s+)/i).filter(s => s.trim());
+      let allItems = [];
+      for (const seg of segments) {
+        const segMsg = seg.trim();
+        if (!segMsg) continue;
+        const segNormalized = normalizeOrderText(segMsg);
+        const parsedSeg = parseOrderByKeywords(segNormalized, products, additions);
+        if (parsedSeg && parsedSeg.items.length > 0) {
+          allItems = allItems.concat(parsedSeg.items);
+        }
+      }
 
-      if (parsed && parsed.items.length > 0) {
-        parsed.byKeyword = true;
+      if (allItems.length > 0) {
+        parsed = { order: true, items: allItems, byKeyword: true };
       } else {
         // ── LLM fallback – NOT IN USE, kept for future ──
         // console.log("Keyword parser found nothing, trying LLM…");
@@ -298,7 +340,7 @@ const stepHandlers = {
 
     if (!parsed || parsed.order === false || !parsed.items || parsed.items.length === 0) {
       const lowerMsg = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-      if (/\bmacarrao\b/.test(lowerMsg) || /\bmac\b/.test(lowerMsg)) {
+      if (/\b(macarrao|mac|espaguete|spaghetti|espagueti)\b/.test(lowerMsg)) {
         const parts = extractMacarraoParts(rawMessage);
         if (!parts.type && !parts.size) {
           updateSession(phone, { step: "CLARIFICAR_MACARRAO", macarraoType: null, macarraoMissing: "both", pendingItems: [] });
@@ -315,11 +357,21 @@ const stepHandlers = {
       const casual = getCasualReply(rawMessage);
       const fallback = casual || "Desculpe, não consegui entender. Pode tentar '2 X-Bacon, 1 Coca'?";
       await sendWhatsAppReply(from, fallback, sessionId);
+
+      // 🆕 If the message was a delivery inquiry, remember the context
+      const lowerCheck = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      if (
+        (lowerCheck.includes("?") || lowerCheck.includes("??")) &&
+        (lowerCheck.includes("entrega") || lowerCheck.includes("delivery") || lowerCheck.includes("entregam") || lowerCheck.includes("fazem") || lowerCheck.includes("fazendo"))
+      ) {
+        updateSession(phone, { orderType: "Delivery" });
+      }
+
       return true;
     }
 
     const lowerRaw = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-    const hasMacarraoMention = /\bmacarrao\b/.test(lowerRaw) || /\bmac\b/.test(lowerRaw);
+    const hasMacarraoMention = /\b(macarrao|mac|espaguete|spaghetti|espagueti)\b/.test(lowerRaw);
     const hasMacarraoInItems = parsed.items.some((item) => item.name.toLowerCase().includes("macarrão"));
 
     if (hasMacarraoMention && !hasMacarraoInItems) {
@@ -414,9 +466,31 @@ const stepHandlers = {
       const optionList = unknownAddition.options
         .map((opt, i) => `${i + 1} - ${opt.name}`)
         .join("\n");
+
+      // 🆕 Find the item the alias word is closest to
+      const aliasWord = unknownAddition.aliasWord;
+      const msgWords = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().split(/\s+/);
+      const aliasWordIndex = msgWords.indexOf(aliasWord);
+      let closestIdx = 0;
+      let minDist = Infinity;
+      for (let i = 0; i < finalItems.length; i++) {
+        const itemFirstWord = finalItems[i].name
+          .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase().split(" ")[0];
+        let lastPos = -1;
+        for (let j = 0; j < msgWords.length; j++) {
+          if (msgWords[j] === itemFirstWord) lastPos = j;
+        }
+        if (lastPos >= 0 && aliasWordIndex - lastPos < minDist) {
+          minDist = aliasWordIndex - lastPos;
+          closestIdx = i;
+        }
+      }
+
       updateSession(phone, {
         step: "PERGUNTAR_ADICIONAL",
         pendingAdditionAlias: unknownAddition,
+        pendingAdditionTargetIndex: closestIdx,   // 🆕
         items: finalItems,
       });
       await sendWhatsAppReply(
@@ -459,9 +533,18 @@ const stepHandlers = {
       updateSession(phone, { step: "PERGUNTAR_TIPO" });
       await sendWhatsAppReply(from, "📋 Itens registados! Como deseja receber o pedido?\n1️⃣ Para levar\n2️⃣ Entrega\n3️⃣ No local", sessionId);
     } else if (needAddr && !hasAddr) {
-      updateSession(phone, { step: "PERGUNTAR_PAGAMENTO", address: rawMessage.trim() });
-      await sendWhatsAppReply(from, "💳 Qual a forma de pagamento? (Dinheiro, Cartão ou Pix)", sessionId);
-    } else if (!hasPayment) {
+      // Check if the current message already contains an address
+      const addrInMsg = extractAddress(rawMessage);
+      if (addrInMsg) {
+        updateSession(phone, { step: "PERGUNTAR_PAGAMENTO", address: addrInMsg });
+        await sendWhatsAppReply(from, "💳 Qual a forma de pagamento? (Dinheiro, Cartão ou Pix)", sessionId);
+      } else {
+        // No address found – ask for it explicitly
+        updateSession(phone, { step: "PERGUNTAR_MORADA" });
+        await sendWhatsAppReply(from, "🏠 Qual o endereço completo para entrega?\nExemplo: Rua das Flores, 123, apto 2", sessionId);
+      }
+    }
+    else if (!hasPayment) {
       updateSession(phone, { step: "PERGUNTAR_PAGAMENTO" });
       await sendWhatsAppReply(from, "💳 Qual a forma de pagamento?\n1️⃣ Dinheiro\n2️⃣ Cartão\n3️⃣ Pix", sessionId);
     }
@@ -642,11 +725,38 @@ const stepHandlers = {
   async PERGUNTAR_ADICIONAL(ctx) {
     const { phone, from, rawMessage, sessionId, session } = ctx;
     const aliasInfo = session.pendingAdditionAlias;
+    const targetIndex = session.pendingAdditionTargetIndex;  // 🆕 which item gets the addition
+
     if (!aliasInfo) {
       updateSession(phone, { step: "RECEBER_ITENS" });
       return false;
     }
 
+    // Auto‑attach if only one option
+    if (aliasInfo.options.length === 1) {
+      const chosenOption = aliasInfo.options[0];
+      const items = session.items || [];
+      if (targetIndex === undefined || !items[targetIndex]) {
+        await sendWhatsAppReply(from, "Erro interno – não foi possível adicionar o item.", sessionId);
+        clearSession(phone);
+        return true;
+      }
+      const targetItem = items[targetIndex];
+      if (!targetItem.additions) targetItem.additions = [];
+      targetItem.additions.push({ name: chosenOption.name, price: chosenOption.price });
+
+      updateSession(phone, {
+        step: "RECEBER_ITENS",
+        items: items,
+        pendingAdditionAlias: null,
+        pendingAdditionTargetIndex: null,
+        skipParsing: true,
+      });
+      await sendWhatsAppReply(from, `✅ Adicionado: ${chosenOption.name}`, sessionId);
+      return false;
+    }
+
+    // Multiple options – ask the customer to choose
     const choice = rawMessage.trim();
     let chosenOption = null;
     if (/^\d+$/.test(choice)) {
@@ -670,13 +780,12 @@ const stepHandlers = {
     }
 
     const items = session.items || [];
-    if (items.length === 0) {
-      await sendWhatsAppReply(from, "Não encontrei nenhum item para adicionar. Por favor, refaça o pedido.", sessionId);
+    if (targetIndex === undefined || !items[targetIndex]) {
+      await sendWhatsAppReply(from, "Erro interno – não foi possível adicionar o item.", sessionId);
       clearSession(phone);
       return true;
     }
-
-    const targetItem = items[items.length - 1];
+    const targetItem = items[targetIndex];
     if (!targetItem.additions) targetItem.additions = [];
     targetItem.additions.push({ name: chosenOption.name, price: chosenOption.price });
 
@@ -684,6 +793,7 @@ const stepHandlers = {
       step: "RECEBER_ITENS",
       items: items,
       pendingAdditionAlias: null,
+      pendingAdditionTargetIndex: null,
       skipParsing: true,
     });
     await sendWhatsAppReply(from, `✅ Adicionado: ${chosenOption.name}`, sessionId);
@@ -824,17 +934,14 @@ router.post("/webhook", async (req, res) => {
       return res.json({ status: "bot_offline" });
     }
 
-    // ---- Muted session check (post‑order) ----
+    // ---- Muted session check (post‑order) – completely silent unless customer wants a new order ----
     if (session.muted) {
       const lowerMsg = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-      if (/\b(novo pedido|pedir|quero pedir|fazer pedido|pedido)\b/i.test(lowerMsg)) {
+      if (/\b(novo pedido|quero pedir|fazer pedido)\b/i.test(lowerMsg)) {
         unmuteSession(phone);
         session = getSession(phone);
       } else {
-        if (!session.muteMessageSent) {
-          await sendWhatsAppReply(from, "✅ Seu pedido foi finalizado. Para fazer um novo pedido, digite *novo pedido*.", sessionId);
-          updateSession(phone, { muteMessageSent: true });
-        }
+        // Ignore everything else – no reply at all
         return res.json({ status: "muted" });
       }
     }

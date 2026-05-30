@@ -18,7 +18,10 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
   const stopWords = new Set([
     "lata", "litro", "litros", "ml", "l", "2l", "1l", "600ml", "350ml",
     "un", "unid", "unidade", "unidades", "x", "de", "com", "sem", "para",
-    "quero", "pedido", "pedir", "vou", "vamos", "ai", "aí", "no", "na", "faz", "fazer"
+    "quero", "pedido", "pedir", "vou", "vamos", "ai", "aí", "no", "na", "faz", "fazer",
+    // 🆕 number words – prevent false addition matches (e.g. "oito" → "ovo")
+    "um", "uma", "dois", "duas", "tres", "três", "quatro", "cinco", "seis",
+    "sete", "oito", "nove", "dez", "onze", "doze", "treze", "catorze", "quinze",
   ]);
 
   const quantityMap = {
@@ -33,7 +36,7 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
     productAliases.set(product, aliases);
   }
 
-  // ✅ FIX 1: Pre‑scan for "sem <potential product word>" and mark both as used
+  // ✅ Pre‑scan for "sem <potential product word>" and mark both as used
   const productWordSet = new Set();
   for (const product of menuItems) {
     const name = product.name
@@ -166,7 +169,7 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
     }
   }
 
-  // ✅ FIX 3: Additions – skip if the token was already consumed, and use expanded synonyms
+  // ✅ FIX 3: Additions – skip number words & use expanded synonyms
   const allProductNames = menuItems.map(p =>
     p.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim()
   );
@@ -193,19 +196,16 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
   for (const add of additions) {
     const addNorm = add.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     if (foundItems.some(item => (item.additions || []).some(a => a.name === add.name))) continue;
+    if (expandedProductNames.some(name => name.includes(addNorm))) continue;
 
-    // Use expandedProductNames for implication check
-    if (expandedProductNames.some(name => name.includes(addNorm))) {
-      console.log(`Skipping addition "${add.name}" – already implied by product`);
-      continue;
-    }
-
-    // Find best token match among **unused** words
+    // Find best token match among **unused** and **non‑number** words
     let bestTokenIndex = -1, bestDist = Infinity;
     for (let i = 0; i < words.length; i++) {
-      if (usedIndices.has(i)) continue;       // skip words already assigned to products or observations
+      if (usedIndices.has(i)) continue;
       const token = words[i];
       if (token.length < 3) continue;
+      if (stopWords.has(token)) continue;                     // 🆕 skip number words
+      if (/^\d+$/.test(token)) continue;                     // also skip pure digits
       const dist = levenshtein(token, addNorm);
       if (dist <= 2 && dist < bestDist) { bestDist = dist; bestTokenIndex = i; }
     }

@@ -6,9 +6,9 @@ import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { axiosWrapper } from "../../https/axiosWrapper";
 import { enqueueSnackbar } from "notistack";
-import { MdDeliveryDining, MdLocationOn } from "react-icons/md";
+import { MdDeliveryDining, MdLocationOn, MdClose } from "react-icons/md";
 
-// Quick-pick fee presets (adjust to your real prices)
+// Quick-pick fee presets
 const FEE_PRESETS = [2, 3, 4, 5];
 
 const DeliveryFeeModal = ({ order, onClose }) => {
@@ -23,9 +23,8 @@ const DeliveryFeeModal = ({ order, onClose }) => {
       axiosWrapper.patch(`/order/${order._id}/delivery-fee`, { deliveryFee }),
     onSuccess: async () => {
       enqueueSnackbar("Taxa aplicada! Mensagem enviada ao cliente. ✅", { variant: "success" });
-      // ✅ Wait for the refetch to complete before closing so Orders page is already updated
       await queryClient.invalidateQueries({ queryKey: ["orders"], refetchType: "active" });
-      onClose();
+      onClose(); // close modal after success
     },
     onError: (err) => {
       enqueueSnackbar(
@@ -50,13 +49,20 @@ const DeliveryFeeModal = ({ order, onClose }) => {
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       <div className="bg-[#1f1f1f] border border-[#3a3a3a] rounded-xl w-[420px] overflow-hidden shadow-2xl">
 
-        {/* Header */}
-        <div className="bg-[#f6b100] px-6 py-4 flex items-center gap-3">
+        {/* Header with close button */}
+        <div className="bg-[#f6b100] px-6 py-4 flex items-center gap-3 relative">
           <MdDeliveryDining size={28} className="text-[#1f1f1f]" />
-          <div>
+          <div className="flex-1">
             <h2 className="text-[#1f1f1f] text-lg font-bold leading-tight">Taxa de Entrega</h2>
             <p className="text-[#1f1f1f]/70 text-sm">{order.customerDetails?.name}</p>
           </div>
+          <button
+            onClick={onClose}
+            className="absolute top-2 right-2 text-[#1f1f1f] hover:text-white transition-colors"
+            title="Fechar"
+          >
+            <MdClose size={24} />
+          </button>
         </div>
 
         {/* Address */}

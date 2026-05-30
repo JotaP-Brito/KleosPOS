@@ -1,10 +1,5 @@
 // utils/whatsappHelpers.js
-// All classification and extraction helpers for the WhatsApp flow.
-// Previously scattered inline in whatsappRoute.js.
 
-// ─────────────────────────────────────────────
-// Text normalizer (strip accents, lowercase)
-// ─────────────────────────────────────────────
 function norm(text) {
   return (text || "")
     .normalize("NFD")
@@ -18,12 +13,24 @@ function norm(text) {
 // ─────────────────────────────────────────────
 function extractOrderType(msg) {
   const lower = norm(msg);
-  if (/(vou|vo|vo|vou)\s*(busca|buscar|retira|retirar|levanta|levantar|pega|pegar|passa|passar)\b/.test(lower))
-    return "Takeaway";
-  if (lower.includes("entrega") || lower.includes("delivery") || lower.includes("entregar"))
-    return "Delivery";
-  if (lower.includes("levar") || lower.includes("takeaway"))
-    return "Takeaway";
+  if (
+    /(vou|vo)\s*(busca|buscar|retira|retirar|levanta|levantar|pega|pegar|passa|passar|busc)\b/.test(lower) ||
+    lower.includes("vou buscar") ||
+    lower.includes("vou pegar") ||
+    lower.includes("pra retirar") ||
+    lower.includes("pra buscar") ||
+    lower.includes("buscar ai") ||
+    lower.includes("buscar ahi") ||
+    lower.includes("vou la buscar") ||
+    lower.includes("levar") ||
+    lower.includes("takeaway") ||
+    lower.includes("retirada") ||
+    lower.includes("vou retirar")
+  ) return "Takeaway";
+  if (
+    lower.includes("entrega") || lower.includes("delivery") ||
+    lower.includes("entregar") || lower.includes("entregar")
+  ) return "Delivery";
   if (lower.includes("local") || lower.includes("mesa") || lower.includes("pe"))
     return "Dine-in";
   return null;
@@ -34,9 +41,14 @@ function extractOrderType(msg) {
 // ─────────────────────────────────────────────
 function extractPayment(msg) {
   const lower = norm(msg);
-  if (lower.includes("pix")) return "Pix" ;
-  if (lower.includes("cartao") || lower.includes("cartão")) return "Cartão";
-  if (lower.includes("dinheiro")) return "Dinheiro";
+  if (lower.includes("pix")) return "Pix";
+  if (
+    lower.includes("cartao") || lower.includes("cartão") ||
+    lower.includes("credito") || lower.includes("debito") ||
+    lower.includes("maquina") || lower.includes("maquininha")
+  ) return "Cartão";
+  if (lower.includes("dinheiro") || lower.includes("especie") || lower.includes("espécie"))
+    return "Dinheiro";
   return null;
 }
 
@@ -46,9 +58,9 @@ function extractPayment(msg) {
 function extractAddress(msg) {
   const text = msg.trim();
   const patterns = [
-    /(?:rua|avenida|av\.|travessa|trv\.|alameda|rodovia|estrada)\s+[\w\s\-]+?,?\s*\d+/i,
+    /(?:rua|avenida|av\.|travessa|trv\.|alameda|rodovia|estrada|beco)\s+[\w\s\-]+?,?\s*\d+/i,
     /(?:rua|avenida|av\.)\s+[\w\s\-]+/i,
-    /\b(?:casa|apto|apartamento|bloco|bl|fundos|lote)\s*\w+/i,
+    /\b(?:casa|apto|apartamento|bloco|bl|fundos|lote)\s*[\w\d]+/i,
   ];
   for (const pattern of patterns) {
     const match = text.match(pattern);
@@ -80,14 +92,14 @@ function extractMacarraoParts(msg) {
 }
 
 // ─────────────────────────────────────────────
-// Step-based classifier (replaces duplicate simpleClassify + classifyMessage)
+// Step-based classifier
 // ─────────────────────────────────────────────
 function classifyStep(step, message) {
   const msg = norm(message);
 
   switch (step) {
     case "PERGUNTAR_TIPO":
-      if (msg === "1" || msg.includes("levar") || msg.includes("buscar") || msg.includes("retirar") || msg.includes("takeaway"))
+      if (msg === "1" || msg.includes("levar") || msg.includes("buscar") || msg.includes("retirar") || msg.includes("takeaway") || msg.includes("retirada"))
         return { tipo: "Takeaway" };
       if (msg === "2" || msg.includes("entrega") || msg.includes("delivery") || msg.includes("entregar"))
         return { tipo: "Delivery" };
@@ -96,9 +108,9 @@ function classifyStep(step, message) {
       return null;
 
     case "PERGUNTAR_PAGAMENTO":
-      if (msg === "1" || msg.includes("dinheiro") || msg.includes("cash"))
+      if (msg === "1" || msg.includes("dinheiro") || msg.includes("cash") || msg.includes("especie"))
         return { pagamento: "Dinheiro" };
-      if (msg === "2" || msg.includes("cartao") || msg.includes("credito") || msg.includes("debito"))
+      if (msg === "2" || msg.includes("cartao") || msg.includes("credito") || msg.includes("debito") || msg.includes("maquina"))
         return { pagamento: "Cartão" };
       if (msg === "3" || msg.includes("pix"))
         return { pagamento: "Pix" };
@@ -106,7 +118,7 @@ function classifyStep(step, message) {
 
     case "CONFIRMAR": {
       const positive = ["sim", "s", "ok", "confirmo", "pode", "fechado", "quero", "isso", "isso mesmo", "confirmar", "vai", "bora"];
-      const negative = ["nao", "nao", "n", "cancelar", "cancela", "errado", "alterar", "mudar", "trocar"];
+      const negative = ["nao", "n", "cancelar", "cancela", "errado", "alterar", "mudar", "trocar"];
       if (positive.some((p) => msg === p || msg.includes(p))) return { confirmado: true };
       if (negative.some((n) => msg === n || msg.includes(n))) return { confirmado: false };
       return null;
@@ -122,59 +134,96 @@ function classifyStep(step, message) {
 // ─────────────────────────────────────────────
 function getCasualReply(msg) {
   const lower = norm(msg);
-  if (lower.includes("como") && /(vai|esta|estas|ta|tas|tao|vao|passando|passa|anda)\b/.test(lower))
-    return "Estou ótimo, obrigado! 🍔Envie seu pedido em uma única mensagem e eu anoto tudo!";
-  if (lower.match(/tudo bem|tudo certo|tudo joia|tranquilo|beleza|salve|fala/))
-    return "Estou ótimo, obrigado! 🍔Envie seu pedido em uma única mensagem e eu anoto tudo!";
-  if (lower.includes("cardapio") || lower.includes("menu")) return "cardapio";
-  if (lower.includes("preco") || lower.includes("quanto") || lower.includes("custa"))
+
+  // "Tem refri lata?" / "tem X?" → drink inquiry
+  if (
+    (lower.includes("tem ") || lower.includes("voces tem") || lower.includes("tem como")) &&
+    (lower.includes("refri") || lower.includes("refrigerante") || lower.includes("bebida") || lower.includes("suco") || lower.includes("lata"))
+  ) return "Temos: Coca-Cola lata, Guaraná lata, Fanta laranja lata e Sprite lata! 🥤 Qual prefere?";
+
+  // 🆕 Delivery inquiry – only if the message looks like a question
+  if (
+    (lower.includes("?") || lower.includes("??")) &&
+    (lower.includes("entrega") || lower.includes("delivery") || lower.includes("entregam") || lower.includes("fazem") || lower.includes("fazendo"))
+  ) return "Sim, fazemos entrega! 🛵 Envie seu endereço completo e o pedido que logo chegamos aí. 😊";
+
+  // Price inquiry
+  if (
+    (lower.includes("quanto") || lower.includes("preco") || lower.includes("valor") || lower.includes("custa")) &&
+    !lower.includes("troco")
+  ) return "cardapio";
+
+  // Menu requests
+  if (lower.includes("cardapio") || lower.includes("menu") || lower.includes("tem como mandar o cardapio"))
     return "cardapio";
-  if (lower.includes("horario") || lower.includes("abre") || lower.includes("fecha") || lower.includes(aberto)|| lower.includes(fechado))
-    return "Estamos abertos de segunda à sexta das 18h às 23h.";
-  if (lower.match(/bom dia|boa tarde|boa noite|oi|ola|oii|hey/))
+
+  // Hours / open status
+  if (
+    lower.includes("horario") || lower.includes("abre") || lower.includes("fecha") ||
+    lower.includes("aberto") || lower.includes("fechado") || lower.includes("atendendo") ||
+    lower.includes("funcionando") || lower.includes("abertos") || lower.includes("ainda atendendo")
+  ) return "Estamos abertos de segunda à sexta das 18h às 23h. 🕕";
+
+  // How are you / greetings
+  if (lower.includes("como") && /(vai|esta|estas|ta|tas|tao|vao|passando|passa|anda)\b/.test(lower))
+    return "Tudo ótimo, obrigado! 🍔 Envie seu pedido em uma única mensagem e eu anoto tudo!";
+  if (lower.match(/tudo bem|tudo certo|tudo joia|tranquilo|beleza|salve|fala/))
+    return "Tudo ótimo! 🍔 Envie seu pedido em uma única mensagem e eu anoto tudo!";
+
+  // Simple greetings — only return casual reply if message is JUST a greeting (no order content)
+  if (lower.match(/^(bom dia|boa tarde|boa noite|oi|ola|oii|hey|ola|olá)[\s!.]*$/))
     return "Olá! 🍔 Envie seu pedido em uma única mensagem e eu anoto tudo!";
+
   return null;
-  if (lower.includes("atendendo") || lower.includes("funcionando") || lower.includes(abertos))
-    return "Sim! Envie seu pedido em uma única mensagem e eu anoto tudo!";
 }
 
 // ─────────────────────────────────────────────
-// Extract a whole number from a message (for troco value)
+// Extract a number from a message (for troco value)
 // ─────────────────────────────────────────────
 function extractNumber(text) {
-  const cleaned = text.replace(/[.,]/g, "");   // remove dots/commas
+  const cleaned = text.replace(/[.,]/g, "");
   const match = cleaned.match(/\d+/);
   return match ? parseInt(match[0], 10) : null;
 }
+
 // ─────────────────────────────────────────────
-// Addition aliases – map vague words to concrete addition options
+// Addition aliases
 // ─────────────────────────────────────────────
 const ADDITION_ALIASES = {
   bife: {
     category: "carne",
     options: [
-      { name: "Carne 120g Picanha", price: 12.0 },   // use the actual prices from your DB
-      { name: "Carne 90g", price: 8.0 }
-    ]
+      { name: "Carne 120g Picanha", price: 5.0 },
+      { name: "Carne 90g", price: 4.0 },
+    ],
   },
-  // Add more aliases here as needed, e.g.:
-  // 'cheddar': { category: 'queijo', options: [...] }
+  carne: {
+    category: "carne",
+    options: [
+      { name: "Carne 120g Picanha", price: 5.0 },
+      { name: "Carne 90g", price: 4.0 },
+    ],
+  },
+  // 🆕 frango desfiado alias
+  "frango desfiado": {
+    category: "adicional",
+    options: [
+      { name: "Frango Desfiado", price: 4.0 }   // adjust price to match your DB
+    ],
+  },
+  frango: {
+    category: "adicional",
+    options: [
+      { name: "Frango Desfiado", price: 4.0 }
+    ],
+  },
 };
 
-/**
- * Checks if a word (after normalization) is an addition alias.
- * Returns the alias info (category, options) or null.
- */
 function getAdditionAlias(word) {
   const normalized = word.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   return ADDITION_ALIASES[normalized] || null;
 }
 
-/**
- * Scans the raw message for any word that matches an addition alias
- * and has NOT already been consumed (i.e., not part of a product or a known addition).
- * Returns the first alias info found, or null.
- */
 function detectUnknownAddition(rawMessage, usedWordsSet) {
   const words = rawMessage
     .normalize("NFD")
@@ -188,16 +237,13 @@ function detectUnknownAddition(rawMessage, usedWordsSet) {
   for (const word of words) {
     if (usedWordsSet && usedWordsSet.has(word)) continue;
     const alias = getAdditionAlias(word);
-    if (alias) {
-      return { aliasWord: word, ...alias };
-    }
+    if (alias) return { aliasWord: word, ...alias };
   }
   return null;
 }
 
 // ─────────────────────────────────────────────
-// Order summary builder (used in CONFIRMAR + PERGUNTAR_PAGAMENTO)
-// ✅ NOW INCLUDES OBSERVATION TEXT
+// Order summary builder
 // ─────────────────────────────────────────────
 function buildOrderSummary(sess) {
   const total = sess.items.reduce((sum, item) => {
@@ -207,7 +253,7 @@ function buildOrderSummary(sess) {
 
   const tipo =
     sess.orderType === "Dine-in"
-      ? "No local (Em pé)"
+      ? "No local"
       : sess.orderType === "Delivery"
         ? `Entrega em ${sess.address || "?"}`
         : "Para levar";
@@ -216,16 +262,14 @@ function buildOrderSummary(sess) {
     .map((i) => {
       let line = `${i.quantity}x ${i.name}`;
       if (i.additions?.length) line += ` (+ ${i.additions.map((a) => a.name).join(", ")})`;
-      // 🆕 Show observation (e.g. "sem salada") if present
       if (i.observation) line += ` [${i.observation}]`;
       return line;
     })
     .join("\n");
 
-  // Include troco info if applicable
   let trocoLine = "";
   if (sess.changeNeeded && sess.changeFor > 0) {
-    trocoLine = `\n🪙 Troco para: R$ ${sess.changeFor.toFixed(2)}`;
+    trocoLine = `\n🪙 Troco para: R$ ${Number(sess.changeFor).toFixed(2)}`;
   }
 
   return { total, tipo, itens: itens + trocoLine };
@@ -244,5 +288,5 @@ module.exports = {
   extractNumber,
   getAdditionAlias,
   detectUnknownAddition,
-  ADDITION_ALIASES,   
+  ADDITION_ALIASES,
 };
