@@ -190,33 +190,45 @@ function extractNumber(text) {
 // Addition aliases
 // ─────────────────────────────────────────────
 const ADDITION_ALIASES = {
-  bife: {
-    category: "carne",
-    options: [
-      { name: "Carne 120g Picanha", price: 5.0 },
-      { name: "Carne 90g", price: 4.0 },
-    ],
-  },
-  carne: {
-    category: "carne",
-    options: [
-      { name: "Carne 120g Picanha", price: 5.0 },
-      { name: "Carne 90g", price: 4.0 },
-    ],
-  },
-  // 🆕 frango desfiado alias
-  "frango desfiado": {
-    category: "adicional",
-    options: [
-      { name: "Frango Desfiado", price: 4.0 }   // adjust price to match your DB
-    ],
-  },
-  frango: {
-    category: "adicional",
-    options: [
-      { name: "Frango Desfiado", price: 4.0 }
-    ],
-  },
+  // ── Carne ──────────────────────────────────────────────────────────────────
+  bife:           { category: "carne",     options: [{ name: "Carne 90g",          price: 4.0 }, { name: "Carne 120g Picanha", price: 5.0 }] },
+  bifinho:        { category: "carne",     options: [{ name: "Carne 90g",          price: 4.0 }] },
+  carne:          { category: "carne",     options: [{ name: "Carne 90g",          price: 4.0 }, { name: "Carne 120g Picanha", price: 5.0 }] },
+  "carne normal": { category: "carne",     options: [{ name: "Carne 90g",          price: 4.0 }] },
+  "carne 90g":    { category: "carne",     options: [{ name: "Carne 90g",          price: 4.0 }] },
+  picanha:        { category: "carne",     options: [{ name: "Carne 120g Picanha", price: 5.0 }] },
+  "carne picanha":{ category: "carne",     options: [{ name: "Carne 120g Picanha", price: 5.0 }] },
+  "carne 120g":   { category: "carne",     options: [{ name: "Carne 120g Picanha", price: 5.0 }] },
+
+  // ── Bacon ──────────────────────────────────────────────────────────────────
+  bacon:          { category: "adicional", options: [{ name: "Bacon",              price: 4.0 }] },
+
+  // ── Frango ─────────────────────────────────────────────────────────────────
+  frango:          { category: "adicional", options: [{ name: "Frango Desfiado",   price: 4.0 }] },
+  "frango desfiado":{ category: "adicional",options: [{ name: "Frango Desfiado",   price: 4.0 }] },
+
+  // ── Queijos ────────────────────────────────────────────────────────────────
+  cheddar:        { category: "queijo",    options: [{ name: "Cheddar",            price: 4.0 }] },
+  catupiry:       { category: "queijo",    options: [{ name: "Catupiry",           price: 4.0 }] },
+  requeijao:      { category: "queijo",    options: [{ name: "Catupiry",           price: 4.0 }] }, // customer synonym
+  mussarela:      { category: "queijo",    options: [{ name: "Mussarela",          price: 2.0 }] },
+  mussa:          { category: "queijo",    options: [{ name: "Mussarela",          price: 2.0 }] },
+  muzarela:       { category: "queijo",    options: [{ name: "Mussarela",          price: 2.0 }] },
+  queijo:         { category: "queijo",    options: [{ name: "Mussarela",          price: 2.0 }] },
+
+  // ── Frios ──────────────────────────────────────────────────────────────────
+  presunto:       { category: "adicional", options: [{ name: "Presunto",           price: 2.0 }] },
+
+  // ── Ovo ────────────────────────────────────────────────────────────────────
+  ovo:            { category: "adicional", options: [{ name: "Ovo",                price: 2.0 }] },
+  egg:            { category: "adicional", options: [{ name: "Ovo",                price: 2.0 }] },
+
+  // ── Frutas ─────────────────────────────────────────────────────────────────
+  banana:         { category: "adicional", options: [{ name: "Banana",             price: 2.0 }] },
+  abacaxi:        { category: "adicional", options: [{ name: "Abacaxi",            price: 2.0 }] },
+
+  // ── Milho ──────────────────────────────────────────────────────────────────
+  milho:          { category: "adicional", options: [{ name: "Milho",              price: 1.0 }] },
 };
 
 function getAdditionAlias(word) {

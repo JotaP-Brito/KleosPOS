@@ -300,7 +300,7 @@ const stepHandlers = {
       return true;
     }
 
-    await sendWhatsAppReply(from, "🍔 Pode me enviar seu pedido (ex: 2 X-Bacon, 1 Coca-Cola) que eu anoto tudo!", sessionId);
+    await sendWhatsAppReply(from, "Olá! 🍔 Envie seu pedido em uma única mensagem e eu anoto tudo!(ex: 2 X-Bacon e uma Coca Lata", sessionId);
     updateSession(phone, { step: "RECEBER_ITENS" });
     return true;
   },

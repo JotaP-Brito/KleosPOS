@@ -16,13 +16,14 @@ function normalizeOrderText(text) {
     .replace(/\bpode\s+me\s+mandar\b/g, "")
     .replace(/\bmanda\s+pra\s+mim\b/g, "")
     .replace(/\bgostaria\s+de\s+pedir\b/g, "")
+    .replace(/\bgostaria\s+de\b/g, "")
     .replace(/\bpoderia\s+entregar\b/g, "")
     .replace(/\bpor\s+favor\b/g, "")
     .replace(/\bpor\s+gentileza\b/g, "")
     .replace(/\bgentileza\b/g, "")
     .replace(/\bvou\s+querer\b/g, "")
     .replace(/\bquero\s+pedir\b/g, "")
-    .replace(/\bperdao\b/g, "")     // "Perdão quero X" → customer changed mind, strip the apology
+    .replace(/\bperdao\b/g, "")
     .replace(/\bperdao,?\s*/g, "")
     .replace(/\bpor\s+favor,?\s*/g, "")
     .replace(/\s+/g, " ")
@@ -32,22 +33,18 @@ function normalizeOrderText(text) {
   result = result.replace(/\bmac\b/g, "macarrao");
 
   // ---------- espaguete / spaghetti → macarrao ----------
-  // Customers frequently say espaguete instead of macarrão
   result = result
     .replace(/\bespaguete\b/g, "macarrao")
     .replace(/\bspaghetti\b/g, "macarrao")
-    .replace(/\bespagueti\b/g, "macarrao");
+    .replace(/\bespagueti\b/g, "macarrao")
+    .replace(/\bmassa\b/g, "macarrao");
 
   // ---------- pasta preposition normalization ----------
-  // "macarrao a bolonhesa" / "macarrao na chapa" / "macarrao ao sugo" etc.
   result = result
     .replace(/\b(macarrao)\s+(na|a|ao)\s+(chapa)\b/gi, "$1 $3")
-    .replace(/\b(macarrao)\s+(na|a|ao|a\s+la|a\s+la)\s+(bolonhesa)\b/gi, "$1 $3");
+    .replace(/\b(macarrao)\s+(na|a|ao|a\s+la)\s+(bolonhesa)\b/gi, "$1 $3");
 
   // ---------- size abbreviations ----------
-  // ⚠️  IMPORTANT: only replace size words when NOT part of a street name.
-  // Strategy: replace only when preceded by a product word or comma/newline context.
-  // Simple heuristic: don't replace if the word is surrounded by digits (street numbers).
   result = result
     .replace(/(?<!\d\s)\bgrande\b(?!\s*\d)/g, "g")
     .replace(/\bgrandao\b/g, "g")
@@ -56,8 +53,7 @@ function normalizeOrderText(text) {
     .replace(/(?<!\d\s)\bpequena\b(?!\s*\d)/g, "p")
     .replace(/\bpequenino\b/g, "p");
 
-  // ---------- "outro" size shorthand ----------
-  // "espaguete bolonhesa grande e outro pequeno" → second macarrao bolonhesa p
+  // ---------- "outro/outra P/G" shorthand ----------
   result = result.replace(/\boutro\s+(p|g)\b/g, "macarrao bolonhesa $1");
   result = result.replace(/\boutra\s+(p|g)\b/g, "macarrao bolonhesa $1");
 
@@ -68,7 +64,9 @@ function normalizeOrderText(text) {
     .replace(/\bxsalada\b/g, "x-salada")
     .replace(/\bxegg\b/g, "x-egg")
     .replace(/\bxbacon\b/g, "x-bacon")
-    .replace(/\bxpicanha\b/g, "x-picanha");
+    .replace(/\bxpicanha\b/g, "x-picanha")
+    .replace(/\bxgalinha\b/g, "x-galinha")
+    .replace(/\bgalinha\b/g, "x-galinha");
 
   // ---------- drink brand normalization ----------
   result = result
@@ -83,19 +81,23 @@ function normalizeOrderText(text) {
     .replace(/\b(coca cola)\b(?!\s+(lata|2l|1l|600ml|350ml|litro))/gi, "$1 lata")
     .replace(/\b(guarana)\b(?!\s+(lata|2l|1l|600ml|350ml|litro))/gi, "$1 lata");
 
-  // ---------- "acrescimo de X" → "com X" (normalize addition trigger words) ----------
+  // ---------- addition trigger normalisation ----------
+  // All of these mean "I want to add something" → normalise to "com"
   result = result
     .replace(/\bacrescimo\s+de\b/g, "com")
     .replace(/\bacrescimo\b/g, "com")
     .replace(/\badicional\s+de\b/g, "com")
-    .replace(/\badicional\b/g, "com");
+    .replace(/\badicional\b/g, "com")
+    .replace(/\badicione\b/g, "com")
+    .replace(/\badicionando\b/g, "com")
+    .replace(/\bcoloca\b/g, "com")
+    .replace(/\bcoloque\b/g, "com")
+    .replace(/\btambem\b/g, "e")      // "também catupiry" → "e catupiry"
+    .replace(/\be\s+mais\b/g, "e")    // "e mais bacon" → "e bacon"
+    .replace(/\bpor\s+cima\b/g, "")   // filler after addition name
+    .replace(/\bno\s+lanche\b/g, ""); // filler
 
   // ---------- quantity words ----------
-  // ⚠️  IMPORTANT: do NOT convert "tres" / "três" blindly — it appears in street names
-  // e.g. "Rua tres, 294" or "Rua três". Strategy: only convert if preceded by a digit
-  // pattern or at sentence start with a clear order context.
-  // Safest: only convert standalone number words that appear BEFORE a known product word.
-  // We use a post-normalizer pass in keywordParser for this instead, so here we skip "tres".
   result = result
     .replace(/\buma\b/g, "1")
     .replace(/\bum\b/g, "1")
