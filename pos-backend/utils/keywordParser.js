@@ -1,4 +1,5 @@
 const { generateAliases } = require("./orderNormalizer");
+const { levenshtein } = require("./stringUtils");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Addition alias table — maps every word a customer might say to the exact DB name.
@@ -56,6 +57,10 @@ const OBSERVATION_ALIAS_MAP = {
   "pimenta":    "Sem Pimenta",
   "molho":      "Sem Molho",
   "cebolinha":  "Sem Cebolinha",
+  "cheiroverde": "Sem Cheiro Verde",   // "cheiro verde" pre-normalised to single token
+  "salsinha":   "Sem Salsinha",
+  "coentro":    "Sem Coentro",
+  "pimenta":    "Sem Pimenta",
   "bacon":      "Sem Bacon",
   "ovo":        "Sem Ovo",
   "presunto":   "Sem Presunto",
@@ -73,20 +78,6 @@ function _norm(str) {
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function levenshtein(a, b) {
-  const an = a.length, bn = b.length;
-  const m = Array.from({ length: an + 1 }, () => Array(bn + 1).fill(0));
-  for (let i = 0; i <= an; i++) m[i][0] = i;
-  for (let j = 0; j <= bn; j++) m[0][j] = j;
-  for (let i = 1; i <= an; i++) {
-    for (let j = 1; j <= bn; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      m[i][j] = Math.min(m[i - 1][j] + 1, m[i][j - 1] + 1, m[i - 1][j - 1] + cost);
-    }
-  }
-  return m[an][bn];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -191,14 +182,22 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
     }
   }
 
-  // Sort products: longest name first to prefer specific matches
-  const sortedProducts = [...menuItems].sort((a, b) =>
-    _norm(b.name).length - _norm(a.name).length
-  );
+  // Sort products: by longest alias word count first, then by name length.
+  // This ensures "Coca Lata Zero" (4-word alias "coca cola lata zero") is tried
+  // before "Coca Cola Lata" (3-word alias "coca cola lata") at the same position.
+  const sortedProducts = [...menuItems].sort((a, b) => {
+    const aMaxWords = Math.max(...(productAliases.get(a) || [""]).map(al => al.split(" ").length));
+    const bMaxWords = Math.max(...(productAliases.get(b) || [""]).map(al => al.split(" ").length));
+    if (bMaxWords !== aMaxWords) return bMaxWords - aMaxWords;
+    return _norm(b.name).length - _norm(a.name).length;
+  });
 
   // ── Pass 1: multi-word phrase matching ──
+  // Within each product, try aliases sorted by word count desc (longest first).
   for (const product of sortedProducts) {
-    const aliases = productAliases.get(product);
+    const aliases = (productAliases.get(product) || [])
+      .slice()
+      .sort((a, b) => b.split(" ").length - a.split(" ").length);
     for (const alias of aliases) {
       const aliasWords = alias.split(" ");
       if (aliasWords.length < 2) continue;
@@ -366,6 +365,8 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
     // Parse one or more additions chained after this trigger
     // e.g. "com bacon e cheddar" → two additions
     while (j < words.length) {
+      // Skip a bare quantity digit that precedes the addition name ("com 1 ovo" → skip "1")
+      if (/^\d+$/.test(words[j])) { j++; continue; }
       // Stop at a new trigger, "sem", a number, or another product
       if (ADD_TRIGGERS.has(words[j]) || words[j] === "sem" || /^\d+$/.test(words[j])) break;
       // Stop at a quantity word that isn't being used as an addition
@@ -426,4 +427,4 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
   return { order: true, items: cleanedItems };
 }
 
-module.exports = { parseOrderByKeywords };
+module.exports = { parseOrderByKeywords, ADDITION_ALIAS_MAP };

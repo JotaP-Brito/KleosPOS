@@ -1,4 +1,5 @@
 // utils/whatsappHelpers.js
+const { ADDITION_ALIAS_MAP } = require("./keywordParser");
 
 function norm(text) {
   return (text || "")
@@ -57,15 +58,24 @@ function extractPayment(msg) {
 // ─────────────────────────────────────────────
 function extractAddress(msg) {
   const text = msg.trim();
-  const patterns = [
-    /(?:rua|avenida|av\.|travessa|trv\.|alameda|rodovia|estrada|beco)\s+[\w\s\-]+?,?\s*\d+/i,
-    /(?:rua|avenida|av\.)\s+[\w\s\-]+/i,
-    /\b(?:casa|apto|apartamento|bloco|bl|fundos|lote)\s*[\w\d]+/i,
-  ];
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) return match[0].trim();
-  }
+
+  // Pattern 1: street type + name + number (most reliable — requires a house number)
+  const withNumber = text.match(
+    /(?:rua|avenida|av\.|travessa|trv\.|alameda|rodovia|estrada|beco)\s+[\w\s\-]{2,40?},?\s*\d+[\w\s,.-]*/i
+  );
+  if (withNumber) return withNumber[0].trim();
+
+  // Pattern 2: street type + name, stopping at a comma or end-of-string
+  // Use a non-greedy match capped at 50 chars to prevent swallowing subsequent text.
+  const withoutNumber = text.match(
+    /(?:rua|avenida|av\.)\s+[\w\s\-]{2,40}?(?=,|$)/i
+  );
+  if (withoutNumber) return withoutNumber[0].trim();
+
+  // Pattern 3: apartment / house complement only (fallback when no street keyword is present)
+  const complement = text.match(/\b(?:casa|apto|apartamento|bloco|bl|fundos|lote)\s*[\w\d]+/i);
+  if (complement) return complement[0].trim();
+
   return null;
 }
 
@@ -129,6 +139,10 @@ function classifyStep(step, message) {
   }
 }
 
+// Sentinel returned by getCasualReply when the bot should send the menu image.
+// Use `reply === SEND_MENU` in callers instead of comparing to a raw string.
+const SEND_MENU = Symbol("SEND_MENU");
+
 // ─────────────────────────────────────────────
 // Casual / greeting replies
 // ─────────────────────────────────────────────
@@ -151,11 +165,11 @@ function getCasualReply(msg) {
   if (
     (lower.includes("quanto") || lower.includes("preco") || lower.includes("valor") || lower.includes("custa")) &&
     !lower.includes("troco")
-  ) return "cardapio";
+  ) return SEND_MENU;
 
   // Menu requests
   if (lower.includes("cardapio") || lower.includes("menu") || lower.includes("tem como mandar o cardapio"))
-    return "cardapio";
+    return SEND_MENU;
 
   // Hours / open status
   if (
@@ -189,47 +203,37 @@ function extractNumber(text) {
 // ─────────────────────────────────────────────
 // Addition aliases
 // ─────────────────────────────────────────────
-const ADDITION_ALIASES = {
-  // ── Carne ──────────────────────────────────────────────────────────────────
-  bife:           { category: "carne",     options: [{ name: "Carne 90g",          price: 4.0 }, { name: "Carne 120g Picanha", price: 5.0 }] },
-  bifinho:        { category: "carne",     options: [{ name: "Carne 90g",          price: 4.0 }] },
-  carne:          { category: "carne",     options: [{ name: "Carne 90g",          price: 4.0 }, { name: "Carne 120g Picanha", price: 5.0 }] },
-  "carne normal": { category: "carne",     options: [{ name: "Carne 90g",          price: 4.0 }] },
-  "carne 90g":    { category: "carne",     options: [{ name: "Carne 90g",          price: 4.0 }] },
-  picanha:        { category: "carne",     options: [{ name: "Carne 120g Picanha", price: 5.0 }] },
-  "carne picanha":{ category: "carne",     options: [{ name: "Carne 120g Picanha", price: 5.0 }] },
-  "carne 120g":   { category: "carne",     options: [{ name: "Carne 120g Picanha", price: 5.0 }] },
+//
+// ADDITION_ALIAS_MAP (from keywordParser) is the single source of truth.
+// Here we derive the ADDITION_ALIASES shape that detectUnknownAddition needs:
+// { word → { category, options: [{ name, price }] } }
+//
+// Because ADDITION_ALIAS_MAP maps word → { name, price } (flat), we derive
+// "options" by grouping all entries that share the same DB name and category.
+// Category is inferred from the DB name (same heuristic the old table used).
 
-  // ── Bacon ──────────────────────────────────────────────────────────────────
-  bacon:          { category: "adicional", options: [{ name: "Bacon",              price: 4.0 }] },
+function _inferCategory(dbName) {
+  const n = dbName.toLowerCase();
+  if (n.includes("carne") || n.includes("picanha")) return "carne";
+  if (n.includes("cheddar") || n.includes("catupiry") || n.includes("mussarela") || n.includes("queijo")) return "queijo";
+  return "adicional";
+}
 
-  // ── Frango ─────────────────────────────────────────────────────────────────
-  frango:          { category: "adicional", options: [{ name: "Frango Desfiado",   price: 4.0 }] },
-  "frango desfiado":{ category: "adicional",options: [{ name: "Frango Desfiado",   price: 4.0 }] },
-
-  // ── Queijos ────────────────────────────────────────────────────────────────
-  cheddar:        { category: "queijo",    options: [{ name: "Cheddar",            price: 4.0 }] },
-  catupiry:       { category: "queijo",    options: [{ name: "Catupiry",           price: 4.0 }] },
-  requeijao:      { category: "queijo",    options: [{ name: "Catupiry",           price: 4.0 }] }, // customer synonym
-  mussarela:      { category: "queijo",    options: [{ name: "Mussarela",          price: 2.0 }] },
-  mussa:          { category: "queijo",    options: [{ name: "Mussarela",          price: 2.0 }] },
-  muzarela:       { category: "queijo",    options: [{ name: "Mussarela",          price: 2.0 }] },
-  queijo:         { category: "queijo",    options: [{ name: "Mussarela",          price: 2.0 }] },
-
-  // ── Frios ──────────────────────────────────────────────────────────────────
-  presunto:       { category: "adicional", options: [{ name: "Presunto",           price: 2.0 }] },
-
-  // ── Ovo ────────────────────────────────────────────────────────────────────
-  ovo:            { category: "adicional", options: [{ name: "Ovo",                price: 2.0 }] },
-  egg:            { category: "adicional", options: [{ name: "Ovo",                price: 2.0 }] },
-
-  // ── Frutas ─────────────────────────────────────────────────────────────────
-  banana:         { category: "adicional", options: [{ name: "Banana",             price: 2.0 }] },
-  abacaxi:        { category: "adicional", options: [{ name: "Abacaxi",            price: 2.0 }] },
-
-  // ── Milho ──────────────────────────────────────────────────────────────────
-  milho:          { category: "adicional", options: [{ name: "Milho",              price: 1.0 }] },
-};
+// Build a derived ADDITION_ALIASES map on first use (lazy, but effectively module-init).
+const ADDITION_ALIASES = (() => {
+  const result = {};
+  for (const [word, { name, price }] of Object.entries(ADDITION_ALIAS_MAP)) {
+    const category = _inferCategory(name);
+    if (!result[word]) {
+      result[word] = { category, options: [] };
+    }
+    // Only push if this exact DB name isn't already listed
+    if (!result[word].options.some(o => o.name === name)) {
+      result[word].options.push({ name, price });
+    }
+  }
+  return result;
+})();
 
 function getAdditionAlias(word) {
   const normalized = word.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -296,6 +300,7 @@ module.exports = {
   extractMacarraoParts,
   classifyStep,
   getCasualReply,
+  SEND_MENU,
   buildOrderSummary,
   extractNumber,
   getAdditionAlias,

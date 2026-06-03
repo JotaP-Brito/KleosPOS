@@ -23,10 +23,12 @@ const {
   extractMacarraoParts,
   classifyStep,
   getCasualReply,
+  SEND_MENU,
   buildOrderSummary,
   getAdditionAlias,
   detectUnknownAddition,
 } = require("../utils/whatsappHelpers");
+const { levenshtein } = require("../utils/stringUtils");
 const botStatusRoute = require("../routes/botStatusRoute");
 const router = express.Router();
 
@@ -110,23 +112,6 @@ async function sendMenuImage(chatId, sessionId) {
 }
 
 // ─────────────────────────────────────────────
-// Levenshtein (for fuzzy addition matching)
-// ─────────────────────────────────────────────
-function levenshtein(a, b) {
-  const an = a.length, bn = b.length;
-  const m = Array.from({ length: an + 1 }, () => Array(bn + 1).fill(0));
-  for (let i = 0; i <= an; i++) m[i][0] = i;
-  for (let j = 0; j <= bn; j++) m[0][j] = j;
-  for (let i = 1; i <= an; i++) {
-    for (let j = 1; j <= bn; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      m[i][j] = Math.min(m[i - 1][j] + 1, m[i][j - 1] + 1, m[i - 1][j - 1] + cost);
-    }
-  }
-  return m[an][bn];
-}
-
-// ─────────────────────────────────────────────
 // Fuzzy addition enrichment (only used for LLM results)
 // ─────────────────────────────────────────────
 function enrichWithAdditions(parsedItems, rawMessage, products, additions) {
@@ -186,9 +171,17 @@ function enrichWithAdditions(parsedItems, rawMessage, products, additions) {
   return parsedItems;
 }
 
-// ─────────────────────────────────────────────
-// State machine: step handlers
-// ─────────────────────────────────────────────
+// ETA in minutes by order type (configurable without touching handler logic)
+const ETA_MINUTES = {
+  Takeaway: process.env.ETA_TAKEAWAY  || 15,
+  "Dine-in": process.env.ETA_DINEIN  || 20,
+  Delivery:  process.env.ETA_DELIVERY || 40,
+};
+
+function etaMessage(orderType) {
+  const mins = ETA_MINUTES[orderType] || 30;
+  return `\n\n⏱️ Previsão: ~${mins} minutos.`;
+}
 
 const stepHandlers = {
 
@@ -355,8 +348,13 @@ const stepHandlers = {
         return true;
       }
       const casual = getCasualReply(rawMessage);
-      const fallback = casual || "Desculpe, não consegui entender. Pode tentar '2 X-Bacon, 1 Coca'?";
-      await sendWhatsAppReply(from, fallback, sessionId);
+      if (casual === SEND_MENU) {
+        const sent = await sendMenuImage(from, sessionId);
+        if (!sent) await sendWhatsAppReply(from, "Desculpe, não consegui enviar o cardápio agora. Tente novamente em instantes! 🙏", sessionId);
+      } else {
+        const fallback = casual || "Desculpe, não consegui entender. Pode tentar '2 X-Bacon, 1 Coca'?";
+        await sendWhatsAppReply(from, fallback, sessionId);
+      }
 
       // 🆕 If the message was a delivery inquiry, remember the context
       const lowerCheck = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -410,38 +408,48 @@ const stepHandlers = {
         continue;
       }
 
-      const obsLower = item.observation.toLowerCase();
-      const semMatch = obsLower.match(/sem\s+(\w+)/);
-      if (!semMatch) {
+      const rawLower = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+      // Collect every "N sem <ingredient>" pattern in the raw message that
+      // refers to this item (identified by item name appearing before it).
+      // Each clause may split off a sub-quantity with its own observation.
+      // e.g. "2 X-Bacon, 1 sem cebola e 1 sem tomate" for a qty-2 item:
+      //   → 1x "Sem Cebola", 1x "Sem Tomate"
+      const semClauses = [];
+      const semRe = /(\d+)\s*sem\s+(\w+)/gi;
+      let m;
+      while ((m = semRe.exec(rawLower)) !== null) {
+        semClauses.push({ qty: parseInt(m[1], 10), ingredient: m[2] });
+      }
+
+      // Also collect simple "sem <ingredient>" clauses without a quantity prefix
+      // (these apply to the whole item observation already stored by the parser)
+      const obsIngredients = item.observation
+        .split(",")
+        .map(s => s.trim().replace(/^sem\s+/i, "").toLowerCase())
+        .filter(Boolean);
+
+      if (semClauses.length === 0) {
+        // No explicit quantities — keep item as-is with its merged observation
         finalItems.push(item);
         continue;
       }
 
-      const ingredient = semMatch[1];
-      const rawLower = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      let remaining = item.quantity;
 
-      const splitPattern = new RegExp(`(\\d+)\\s*sem\\s+${ingredient}`, 'i');
-      const splitMatch = rawLower.match(splitPattern);
-
-      if (splitMatch) {
-        const splitQuantity = parseInt(splitMatch[1], 10);
-        if (splitQuantity > 0 && item.quantity > splitQuantity) {
-          finalItems.push({
-            ...item,
-            quantity: splitQuantity,
-            observation: `Sem ${ingredient}`,
-          });
-
-          finalItems.push({
-            ...item,
-            quantity: item.quantity - splitQuantity,
-            observation: "",
-          });
-          continue;
-        }
+      // For each explicit "N sem X" clause, split off N units with that observation
+      for (const clause of semClauses) {
+        if (clause.qty <= 0 || clause.qty > remaining) continue;
+        remaining -= clause.qty;
+        const obsLabel = `Sem ${clause.ingredient.charAt(0).toUpperCase() + clause.ingredient.slice(1)}`;
+        finalItems.push({ ...item, quantity: clause.qty, observation: obsLabel });
       }
 
-      finalItems.push(item);
+      // Whatever is left over gets either no observation or the original observation
+      // minus the already-split clauses
+      if (remaining > 0) {
+        finalItems.push({ ...item, quantity: remaining, observation: "" });
+      }
     }
 
     const usedWords = new Set();
@@ -574,6 +582,16 @@ const stepHandlers = {
   async PERGUNTAR_MORADA(ctx) {
     const { phone, from, rawMessage, sessionId } = ctx;
     const addr = rawMessage.trim();
+
+    if (isWeakAddress(addr)) {
+      await sendWhatsAppReply(
+        from,
+        "Por favor, envie o endereço completo com rua e número.\nExemplo: Rua das Flores, 123, apto 2",
+        sessionId
+      );
+      return true; // stay in PERGUNTAR_MORADA
+    }
+
     updateSession(phone, { step: "PERGUNTAR_PAGAMENTO", address: addr });
     await sendWhatsAppReply(from, "💳 Qual a forma de pagamento? (Dinheiro, Cartão ou Pix)", sessionId);
     return true;
@@ -832,6 +850,7 @@ const stepHandlers = {
             await existingOrder.save();
 
             let confirmMsg = `✅ Pedido #${String(existingOrder._id).slice(-6)} confirmado! Já estamos preparando. Obrigado pela preferência! 🍔`;
+            confirmMsg += etaMessage("Delivery");
 
             if (existingOrder.paymentMethod === "Pix") {
               confirmMsg += "\n\n ❖Chave Pix: 000.00.000-00\n👤 Person";
@@ -850,6 +869,15 @@ const stepHandlers = {
       }
 
       // Normal path (Takeaway / Dine-in): create order from session
+      // Guard: if somehow we're in a Delivery session without a pendingOrderId,
+      // something went wrong in the flow — don't create a second order.
+      if (sess.orderType === "Delivery" && !sess.pendingOrderId) {
+        console.error(`⚠️  CONFIRMAR reached for Delivery session without pendingOrderId – phone: ${phone}`);
+        await sendWhatsAppReply(from, "Houve um problema ao localizar o seu pedido. Por favor, tente novamente.", sessionId);
+        clearSession(phone);
+        return true;
+      }
+
       try {
         const { total } = buildOrderSummary(sess);
         const newOrder = new Order({
@@ -867,6 +895,7 @@ const stepHandlers = {
         await newOrder.save();
 
         let confirmMsg = `✅ Pedido #${String(newOrder._id).slice(-6)} confirmado! Já estamos preparando. Obrigado pela preferência! 🍔`;
+        confirmMsg += etaMessage(newOrder.orderType);
 
         if (newOrder.paymentMethod === "Pix") {
           confirmMsg += "\n\n💳 Chave Pix: 000.000.000\n👤 Person";
@@ -936,7 +965,6 @@ router.post("/webhook", async (req, res) => {
 
     // ---- Muted session check (post‑order) – completely silent unless customer wants a new order ----
     if (session.muted) {
-      const lowerMsg = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
       if (/\b(novo pedido|quero pedir|fazer pedido)\b/i.test(lowerMsg)) {
         unmuteSession(phone);
         session = getSession(phone);
@@ -949,19 +977,24 @@ router.post("/webhook", async (req, res) => {
     // ---- State machine ----
     const ctx = { phone, from, rawMessage, sessionId, session, contact };
 
-    const stepsToRun = [session.step, "RECEBER_ITENS", "PERGUNTAR_TROCO", "PERGUNTAR_VALOR_TROCO", "PERGUNTAR_ADICIONAL", "ENCERRAR"];
+    // Drive the state machine. When a handler returns false it has already
+    // transitioned the session to the next step, so we re-read the session
+    // to pick up the new step rather than relying on a hardcoded fallthrough list.
+    // A visited guard prevents infinite loops if a handler forgets to advance.
     const visited = new Set();
 
-    for (const step of stepsToRun) {
-      if (visited.has(step)) break;
-      visited.add(step);
+    for (;;) {
+      const currentStep = getSession(phone).step;
+      if (visited.has(currentStep)) break;
+      visited.add(currentStep);
 
-      const handler = stepHandlers[step];
+      const handler = stepHandlers[currentStep];
       if (!handler) break;
 
       ctx.session = getSession(phone);
       const handled = await handler(ctx);
-      if (handled) break;
+      if (handled) break; // handler consumed the message – stop
+      // handled === false → handler advanced the step; loop to run the new step
     }
 
     return res.json({ status: "ok" });
