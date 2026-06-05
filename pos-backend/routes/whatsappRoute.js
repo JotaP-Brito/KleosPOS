@@ -186,6 +186,35 @@ function etaMessage(orderType) {
   return `\n\n⏱️ Previsão: ~${mins} minutos.`;
 }
 
+// ─────────────────────────────────────────────
+// Helper: split on " e um/uma" only when the next word is not an addition trigger.
+// Prevents "e um com catupiry" from being split apart.
+// ─────────────────────────────────────────────
+const ADDITION_TRIGGER_WORDS = new Set([
+  "com", "mais", "sem", "acrescimo", "extra", "adicional", "tambem", "e"
+]);
+
+function splitOnEUm(rawMessage) {
+  const segments = [];
+  const regex = /\s+e\s+(um\s+|uma\s+)/gi;
+  let lastIndex = 0;
+  let match;
+  while ((match = regex.exec(rawMessage)) !== null) {
+    const afterMatchIndex = match.index + match[0].length;
+    const rest = rawMessage.slice(afterMatchIndex).trimStart();
+    const nextWord = rest.split(/\s+/, 1)[0] || "";
+    const normalizedNext = nextWord.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    if (ADDITION_TRIGGER_WORDS.has(normalizedNext)) {
+      // This "e um" is part of an addition phrase – don't split
+      continue;
+    }
+    segments.push(rawMessage.slice(lastIndex, match.index));
+    lastIndex = afterMatchIndex;
+  }
+  segments.push(rawMessage.slice(lastIndex));
+  return segments.filter(s => s.trim());
+}
+
 const stepHandlers = {
 
   // ── CLARIFICAR_MACARRAO ──────────────────────────────────────────────────
@@ -238,8 +267,8 @@ const stepHandlers = {
     const { phone, from, rawMessage, sessionId } = ctx;
     const { products, additions } = await getMenuData();
 
-    // 🆕 Split on " e um / e uma" ONLY – keeps inner "e" intact
-    const segments = rawMessage.split(/\s+e\s+(um\s+|uma\s+)/i).filter(s => s.trim());
+    // 🆕 Split on " e um / e uma" ONLY – keeps inner "e" intact, but avoids splitting addition phrases
+    const segments = splitOnEUm(rawMessage);
     let allItems = [];
     for (const seg of segments) {
       const segMsg = seg.trim();
@@ -309,8 +338,8 @@ const stepHandlers = {
     let parsed = null;
 
     if (!session.skipParsing) {
-      // 🆕 Split on " e um / e uma" ONLY
-      const segments = rawMessage.split(/\s+e\s+(um\s+|uma\s+)/i).filter(s => s.trim());
+      // 🆕 Split on " e um / e uma" ONLY (avoid splitting addition phrases)
+      const segments = splitOnEUm(rawMessage);
       let allItems = [];
       for (const seg of segments) {
         const segMsg = seg.trim();
@@ -413,11 +442,7 @@ const stepHandlers = {
 
       const rawLower = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-      // Collect every "N sem <ingredient>" pattern in the raw message that
-      // refers to this item (identified by item name appearing before it).
-      // Each clause may split off a sub-quantity with its own observation.
-      // e.g. "2 X-Bacon, 1 sem cebola e 1 sem tomate" for a qty-2 item:
-      //   → 1x "Sem Cebola", 1x "Sem Tomate"
+      // Collect every "N sem <ingredient>" pattern in the raw message
       const semClauses = [];
       const semRe = /(\d+)\s*sem\s+(\w+)/gi;
       let m;
@@ -425,31 +450,23 @@ const stepHandlers = {
         semClauses.push({ qty: parseInt(m[1], 10), ingredient: m[2] });
       }
 
-      // Also collect simple "sem <ingredient>" clauses without a quantity prefix
-      // (these apply to the whole item observation already stored by the parser)
-      const obsIngredients = item.observation
-        .split(",")
-        .map(s => s.trim().replace(/^sem\s+/i, "").toLowerCase())
-        .filter(Boolean);
-
       if (semClauses.length === 0) {
-        // No explicit quantities — keep item as-is with its merged observation
         finalItems.push(item);
         continue;
       }
 
       let remaining = item.quantity;
 
-      // For each explicit "N sem X" clause, split off N units with that observation
       for (const clause of semClauses) {
-        if (clause.qty <= 0 || clause.qty > remaining) continue;
-        remaining -= clause.qty;
+        if (clause.qty <= 0) continue;
+        // If the requested "sem" quantity exceeds remaining items, still apply the observation to all remaining.
+        const effectiveQty = Math.min(clause.qty, remaining);
+        if (effectiveQty <= 0) continue;
+        remaining -= effectiveQty;
         const obsLabel = `Sem ${clause.ingredient.charAt(0).toUpperCase() + clause.ingredient.slice(1)}`;
-        finalItems.push({ ...item, quantity: clause.qty, observation: obsLabel });
+        finalItems.push({ ...item, quantity: effectiveQty, observation: obsLabel, additions: [] });
       }
 
-      // Whatever is left over gets either no observation or the original observation
-      // minus the already-split clauses
       if (remaining > 0) {
         finalItems.push({ ...item, quantity: remaining, observation: "" });
       }
@@ -513,8 +530,6 @@ const stepHandlers = {
     }
 
     // ── Drink disambiguation (bare "coca", "fanta", etc.) ──────────────────
-    // If a matched drink item came from a generic word with no size qualifier,
-    // ask the customer to choose the exact product — same pattern as additions.
     for (let i = 0; i < finalItems.length; i++) {
       const item = finalItems[i];
       const itemNameNorm = item.name
@@ -522,7 +537,6 @@ const stepHandlers = {
         .replace(/[\u0300-\u036f]/g, "")
         .toLowerCase();
 
-      // Find which generic drink word (if any) this item's name contains
       let triggerWord = null;
       for (const gw of GENERIC_DRINK_WORDS) {
         if (itemNameNorm.includes(gw)) { triggerWord = gw; break; }
@@ -531,7 +545,7 @@ const stepHandlers = {
       if (!needsDrinkDisambiguation(rawMessage, triggerWord)) continue;
 
       const options = getDrinkOptions(triggerWord, products);
-      if (options.length <= 1) continue; // only one match → no ambiguity
+      if (options.length <= 1) continue;
 
       const optionList = options
         .map((opt, idx) => `${idx + 1} - ${opt.name}`)
@@ -583,13 +597,11 @@ const stepHandlers = {
       updateSession(phone, { step: "PERGUNTAR_TIPO" });
       await sendWhatsAppReply(from, "📋 Itens registados! Como deseja receber o pedido?\n1️⃣ Para levar\n2️⃣ Entrega\n3️⃣ No local", sessionId);
     } else if (needAddr && !hasAddr) {
-      // Check if the current message already contains an address
       const addrInMsg = extractAddress(rawMessage);
       if (addrInMsg) {
         updateSession(phone, { step: "PERGUNTAR_PAGAMENTO", address: addrInMsg });
         await sendWhatsAppReply(from, "💳 Qual a forma de pagamento? (Dinheiro, Cartão ou Pix)", sessionId);
       } else {
-        // No address found – ask for it explicitly
         updateSession(phone, { step: "PERGUNTAR_MORADA" });
         await sendWhatsAppReply(from, "🏠 Qual o endereço completo para entrega?\nExemplo: Rua das Flores, 123, apto 2", sessionId);
       }
