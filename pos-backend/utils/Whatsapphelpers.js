@@ -291,6 +291,47 @@ function buildOrderSummary(sess) {
   return { total, tipo, itens: itens + trocoLine };
 }
 
+// ─────────────────────────────────────────────
+// Drink disambiguation helpers
+// ─────────────────────────────────────────────
+
+// Generic words a customer might say instead of a full product name.
+// Normalised (no accents, lowercase) so comparison is straightforward.
+const GENERIC_DRINK_WORDS = new Set([
+  "coca", "cola", "fanta", "guarana", "sprite",
+  "mate", "suco", "agua",
+]);
+
+// Return all products whose name contains the generic word.
+function getDrinkOptions(genericWord, products) {
+  const normWord = (genericWord || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return products.filter(p => {
+    const pName = p.name
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+    return pName.includes(normWord);
+  });
+}
+
+// Returns true when the raw message contains genericWord but NO size qualifier,
+// meaning the customer's intent is ambiguous and we need to ask which product.
+function needsDrinkDisambiguation(rawMessage, genericWord) {
+  const lower = (rawMessage || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  if (!lower.includes(genericWord)) return false;
+  const explicitMarkers = [
+    "lata", "2l", "1l", "600ml", "350ml", "500ml",
+    "zero", "litro", "litros", "lts", "lt",
+  ];
+  return !explicitMarkers.some(marker => lower.includes(marker));
+}
+
 module.exports = {
   norm,
   extractOrderType,
@@ -306,4 +347,7 @@ module.exports = {
   getAdditionAlias,
   detectUnknownAddition,
   ADDITION_ALIASES,
+  GENERIC_DRINK_WORDS,
+  getDrinkOptions,
+  needsDrinkDisambiguation,
 };

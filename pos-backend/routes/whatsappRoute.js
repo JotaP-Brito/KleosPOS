@@ -27,6 +27,9 @@ const {
   buildOrderSummary,
   getAdditionAlias,
   detectUnknownAddition,
+  GENERIC_DRINK_WORDS,
+  getDrinkOptions,
+  needsDrinkDisambiguation,
 } = require("../utils/whatsappHelpers");
 const { levenshtein } = require("../utils/stringUtils");
 const botStatusRoute = require("../routes/botStatusRoute");
@@ -509,6 +512,45 @@ const stepHandlers = {
       return true;
     }
 
+    // ── Drink disambiguation (bare "coca", "fanta", etc.) ──────────────────
+    // If a matched drink item came from a generic word with no size qualifier,
+    // ask the customer to choose the exact product — same pattern as additions.
+    for (let i = 0; i < finalItems.length; i++) {
+      const item = finalItems[i];
+      const itemNameNorm = item.name
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+
+      // Find which generic drink word (if any) this item's name contains
+      let triggerWord = null;
+      for (const gw of GENERIC_DRINK_WORDS) {
+        if (itemNameNorm.includes(gw)) { triggerWord = gw; break; }
+      }
+      if (!triggerWord) continue;
+      if (!needsDrinkDisambiguation(rawMessage, triggerWord)) continue;
+
+      const options = getDrinkOptions(triggerWord, products);
+      if (options.length <= 1) continue; // only one match → no ambiguity
+
+      const optionList = options
+        .map((opt, idx) => `${idx + 1} - ${opt.name}`)
+        .join("\n");
+
+      updateSession(phone, {
+        step: "PERGUNTAR_BEBIDA",
+        pendingDrinkOptions: options,
+        pendingDrinkTargetIndex: i,
+        items: finalItems,
+      });
+      await sendWhatsAppReply(
+        from,
+        `🥤 Qual ${triggerWord.charAt(0).toUpperCase() + triggerWord.slice(1)} você prefere?\n${optionList}`,
+        sessionId
+      );
+      return true;
+    }
+
     const updates = { items: finalItems };
     const sess0 = getSession(phone);
     if (!sess0.orderType) {
@@ -816,6 +858,70 @@ const stepHandlers = {
     });
     await sendWhatsAppReply(from, `✅ Adicionado: ${chosenOption.name}`, sessionId);
     return false;
+  },
+
+  // ── PERGUNTAR_BEBIDA (drink disambiguation) ──────────────────────────────
+  async PERGUNTAR_BEBIDA(ctx) {
+    const { phone, from, rawMessage, sessionId, session } = ctx;
+    const options = session.pendingDrinkOptions;
+    const targetIndex = session.pendingDrinkTargetIndex;
+
+    if (!options || options.length === 0 || targetIndex === undefined) {
+      updateSession(phone, { step: "RECEBER_ITENS" });
+      return false;
+    }
+
+    const choice = rawMessage.trim();
+    let chosenOption = null;
+
+    if (/^\d+$/.test(choice)) {
+      const idx = parseInt(choice, 10) - 1;
+      if (idx >= 0 && idx < options.length) chosenOption = options[idx];
+    } else {
+      const normalizedChoice = choice
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      chosenOption = options.find(opt =>
+        opt.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+          .includes(normalizedChoice)
+      );
+    }
+
+    if (!chosenOption) {
+      const optionList = options.map((opt, i) => `${i + 1} - ${opt.name}`).join("\n");
+      await sendWhatsAppReply(
+        from,
+        `Desculpe, não encontrei essa opção. Escolha uma das seguintes:\n${optionList}`,
+        sessionId
+      );
+      return true;
+    }
+
+    const items = session.items || [];
+    if (targetIndex >= items.length) {
+      await sendWhatsAppReply(from, "Erro interno – não foi possível alterar a bebida.", sessionId);
+      clearSession(phone);
+      return true;
+    }
+
+    // Replace the ambiguous placeholder item with the chosen product
+    const oldItem = items[targetIndex];
+    items[targetIndex] = {
+      name: chosenOption.name,
+      price: chosenOption.price,
+      quantity: oldItem.quantity || 1,
+      observation: oldItem.observation || "",
+      additions: oldItem.additions || [],
+    };
+
+    updateSession(phone, {
+      step: "RECEBER_ITENS",
+      items,
+      pendingDrinkOptions: null,
+      pendingDrinkTargetIndex: null,
+      skipParsing: true,
+    });
+    await sendWhatsAppReply(from, `✅ Bebida alterada para: ${chosenOption.name}`, sessionId);
+    return false; // fall through to RECEBER_ITENS to continue normal flow
   },
 
   // ── AGUARDAR_TAXA ─────────────────────────────────────────────────────────
