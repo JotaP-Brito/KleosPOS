@@ -1,353 +1,228 @@
-// utils/whatsappHelpers.js
-const { ADDITION_ALIAS_MAP } = require("./keywordParser");
+const createHttpError = require("http-errors");
+const Order = require("../models/orderModel");
+const { default: mongoose } = require("mongoose");
+const axios = require("axios");
 
-function norm(text) {
-  return (text || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
+// ─────────────────────────────────────────────────────────────────
+// OpenWA configuration
+// ─────────────────────────────────────────────────────────────────
+const OPENWA_BASE = process.env.OPENWA_URL || "http://localhost:2785";
+const OPENWA_KEY  = process.env.OPENWA_API_KEY || "dev-admin-key";
+
+// Helper: send a simple text message
+async function sendWhatsAppMessage(chatId, text, sessionId) {
+  if (!chatId) return;
+  const sid = sessionId || process.env.OPENWA_SESSION_ID || "default";
+  try {
+    await axios.post(
+      `${OPENWA_BASE}/api/sessions/${sid}/messages/send-text`,
+      { chatId, text },
+      { headers: { "X-API-Key": OPENWA_KEY } }
+    );
+    console.log(`✅ WhatsApp message sent to ${chatId}`);
+  } catch (err) {
+    console.error(`❌ Failed to send WhatsApp message to ${chatId}:`, err.message);
+  }
 }
 
-// ─────────────────────────────────────────────
-// Order type detection
-// ─────────────────────────────────────────────
-function extractOrderType(msg) {
-  const lower = norm(msg);
-  if (
-    /(vou|vo)\s*(busca|buscar|retira|retirar|levanta|levantar|pega|pegar|passa|passar|busc)\b/.test(lower) ||
-    lower.includes("vou buscar") ||
-    lower.includes("vou pegar") ||
-    lower.includes("pra retirar") ||
-    lower.includes("pra buscar") ||
-    lower.includes("buscar ai") ||
-    lower.includes("buscar ahi") ||
-    lower.includes("vou la buscar") ||
-    lower.includes("levar") ||
-    lower.includes("takeaway") ||
-    lower.includes("retirada") ||
-    lower.includes("vou retirar")
-  ) return "Takeaway";
-  if (
-    lower.includes("entrega") || lower.includes("delivery") ||
-    lower.includes("entregar") || lower.includes("entregar")
-  ) return "Delivery";
-  if (lower.includes("local") || lower.includes("mesa") || lower.includes("pe"))
-    return "Dine-in";
-  return null;
-}
+// ─────────────────────────────────────────────────────────────────
+// Customer ready notification (unchanged)
+// ─────────────────────────────────────────────────────────────────
+async function notifyCustomerOrderReady(order) {
+  const chatId = order.whatsappChatId;
+  if (!chatId) {
+    console.log(`⚠️  Order ${order._id} has no whatsappChatId – cannot send ready notification`);
+    return;
+  }
 
-// ─────────────────────────────────────────────
-// Payment detection
-// ─────────────────────────────────────────────
-function extractPayment(msg) {
-  const lower = norm(msg);
-  if (lower.includes("pix")) return "Pix";
-  if (
-    lower.includes("cartao") || lower.includes("cartão") ||
-    lower.includes("credito") || lower.includes("debito") ||
-    lower.includes("maquina") || lower.includes("maquininha")
-  ) return "Cartão";
-  if (lower.includes("dinheiro") || lower.includes("especie") || lower.includes("espécie"))
-    return "Dinheiro";
-  return null;
-}
-
-// ─────────────────────────────────────────────
-// Address extraction
-// ─────────────────────────────────────────────
-function extractAddress(msg) {
-  const text = msg.trim();
-
-  // Pattern 1: street type + name + number (most reliable — requires a house number)
-  const withNumber = text.match(
-    /(?:rua|avenida|av\.|travessa|trv\.|alameda|rodovia|estrada|beco)\s+[\w\s\-]{2,40?},?\s*\d+[\w\s,.-]*/i
-  );
-  if (withNumber) return withNumber[0].trim();
-
-  // Pattern 2: street type + name, stopping at a comma or end-of-string
-  // Use a non-greedy match capped at 50 chars to prevent swallowing subsequent text.
-  const withoutNumber = text.match(
-    /(?:rua|avenida|av\.)\s+[\w\s\-]{2,40}?(?=,|$)/i
-  );
-  if (withoutNumber) return withoutNumber[0].trim();
-
-  // Pattern 3: apartment / house complement only (fallback when no street keyword is present)
-  const complement = text.match(/\b(?:casa|apto|apartamento|bloco|bl|fundos|lote)\s*[\w\d]+/i);
-  if (complement) return complement[0].trim();
-
-  return null;
-}
-
-function isWeakAddress(addr) {
-  if (!addr) return true;
-  const normalized = addr.toLowerCase();
-  if (normalized.length < 10) return true;
-  if (!/\d/.test(normalized)) return true;
-  return false;
-}
-
-// ─────────────────────────────────────────────
-// Macarrão-specific extraction
-// ─────────────────────────────────────────────
-function extractMacarraoParts(msg) {
-  const lower = norm(msg);
-  const type = lower.includes("chapa")
-    ? "chapa"
-    : lower.includes("bolonhesa")
-      ? "bolonhesa"
-      : null;
-  const size = /\b(p|g)\b/.test(lower) ? lower.match(/\b(p|g)\b/)[0] : null;
-  return { type, size };
-}
-
-// ─────────────────────────────────────────────
-// Step-based classifier
-// ─────────────────────────────────────────────
-function classifyStep(step, message) {
-  const msg = norm(message);
-
-  switch (step) {
-    case "PERGUNTAR_TIPO":
-      if (msg === "1" || msg.includes("levar") || msg.includes("buscar") || msg.includes("retirar") || msg.includes("takeaway") || msg.includes("retirada"))
-        return { tipo: "Takeaway" };
-      if (msg === "2" || msg.includes("entrega") || msg.includes("delivery") || msg.includes("entregar"))
-        return { tipo: "Delivery" };
-      if (msg === "3" || msg.includes("local") || msg.includes("mesa") || msg.includes("pe") || msg.includes("comer ai"))
-        return { tipo: "Dine-in" };
-      return null;
-
-    case "PERGUNTAR_PAGAMENTO":
-      if (msg === "1" || msg.includes("dinheiro") || msg.includes("cash") || msg.includes("especie"))
-        return { pagamento: "Dinheiro" };
-      if (msg === "2" || msg.includes("cartao") || msg.includes("credito") || msg.includes("debito") || msg.includes("maquina"))
-        return { pagamento: "Cartão" };
-      if (msg === "3" || msg.includes("pix"))
-        return { pagamento: "Pix" };
-      return null;
-
-    case "CONFIRMAR": {
-      const positive = ["sim", "s", "ok", "confirmo", "pode", "fechado", "quero", "isso", "isso mesmo", "confirmar", "vai", "bora"];
-      const negative = ["nao", "n", "cancelar", "cancela", "errado", "alterar", "mudar", "trocar"];
-      if (positive.some((p) => msg === p || msg.includes(p))) return { confirmado: true };
-      if (negative.some((n) => msg === n || msg.includes(n))) return { confirmado: false };
-      return null;
-    }
-
+  let message = "";
+  switch (order.orderType) {
+    case "Takeaway":
+      message = "🛍️ Seu pedido está pronto para retirada! Pode vir buscar. 😋";
+      break;
+    case "Delivery":
+      message = "🛵 Seu pedido está pronto e logo vai estar a caminho! 🚀";
+      break;
+    case "Dine-in":
+      message = "🍽️ Seu pedido está pronto! Bom apetite! 😋👨‍🍳";
+      break;
     default:
-      return null;
+      message = "🔔 Seu pedido está pronto! 😋";
+      break;
   }
+
+  await sendWhatsAppMessage(chatId, message, process.env.OPENWA_SESSION_ID);
 }
 
-// Sentinel returned by getCasualReply when the bot should send the menu image.
-// Use `reply === SEND_MENU` in callers instead of comparing to a raw string.
-const SEND_MENU = Symbol("SEND_MENU");
+// ─────────────────────────────────────────────────────────────────
+// 🆕 Delivery employee notification
+// ─────────────────────────────────────────────────────────────────
+async function notifyDeliveryEmployee(order) {
+  const deliveryPhone = process.env.DELIVERY_PHONE;
+  if (!deliveryPhone) {
+    console.log(`⚠️  DELIVERY_PHONE not set – skipping employee notification for order ${order._id}`);
+    return;
+  }
 
-// ─────────────────────────────────────────────
-// Casual / greeting replies
-// ─────────────────────────────────────────────
-function getCasualReply(msg) {
-  const lower = norm(msg);
-
-  // "Tem refri lata?" / "tem X?" → drink inquiry
-  if (
-    (lower.includes("tem ") || lower.includes("voces tem") || lower.includes("tem como")) &&
-    (lower.includes("refri") || lower.includes("refrigerante") || lower.includes("bebida") || lower.includes("suco") || lower.includes("lata"))
-  ) return "Temos: Coca-Cola lata, Guaraná lata, Fanta laranja lata e Sprite lata! 🥤 Qual prefere?";
-
-  // 🆕 Delivery inquiry – only if the message looks like a question
-  if (
-    (lower.includes("?") || lower.includes("??")) &&
-    (lower.includes("entrega") || lower.includes("delivery") || lower.includes("entregam") || lower.includes("fazem") || lower.includes("fazendo"))
-  ) return "Sim, fazemos entrega! 🛵 Envie seu endereço completo e o pedido que logo chegamos aí. 😊";
-
-  // Price inquiry
-  if (
-    (lower.includes("quanto") || lower.includes("preco") || lower.includes("valor") || lower.includes("custa")) &&
-    !lower.includes("troco")
-  ) return SEND_MENU;
-
-  // Menu requests
-  if (lower.includes("cardapio") || lower.includes("menu") || lower.includes("tem como mandar o cardapio"))
-    return SEND_MENU;
-
-  // Hours / open status
-  if (
-    lower.includes("horario") || lower.includes("abre") || lower.includes("fecha") ||
-    lower.includes("aberto") || lower.includes("fechado") || lower.includes("atendendo") ||
-    lower.includes("funcionando") || lower.includes("abertos") || lower.includes("ainda atendendo")
-  ) return "Estamos abertos de segunda à sexta das 18h às 23h. 🕕";
-
-  // How are you / greetings
-  if (lower.includes("como") && /(vai|esta|estas|ta|tas|tao|vao|passando|passa|anda)\b/.test(lower))
-    return "Tudo ótimo, obrigado! 🍔 Envie seu pedido em uma única mensagem e eu anoto tudo!";
-  if (lower.match(/tudo bem|tudo certo|tudo joia|tranquilo|beleza|salve|fala/))
-    return "Tudo ótimo! 🍔 Envie seu pedido em uma única mensagem e eu anoto tudo!";
-
-  // Simple greetings — only return casual reply if message is JUST a greeting (no order content)
-  if (lower.match(/^(bom dia|boa tarde|boa noite|oi|ola|oii|hey|ola|olá)[\s!.]*$/))
-    return "Olá! 🍔 Envie seu pedido em uma única mensagem e eu anoto tudo!";
-
-  return null;
-}
-
-// ─────────────────────────────────────────────
-// Extract a number from a message (for troco value)
-// ─────────────────────────────────────────────
-function extractNumber(text) {
-  const cleaned = text.replace(/[.,]/g, "");
-  const match = cleaned.match(/\d+/);
-  return match ? parseInt(match[0], 10) : null;
-}
-
-// ─────────────────────────────────────────────
-// Addition aliases
-// ─────────────────────────────────────────────
-//
-// ADDITION_ALIAS_MAP (from keywordParser) is the single source of truth.
-// Here we derive the ADDITION_ALIASES shape that detectUnknownAddition needs:
-// { word → { category, options: [{ name, price }] } }
-//
-// Because ADDITION_ALIAS_MAP maps word → { name, price } (flat), we derive
-// "options" by grouping all entries that share the same DB name and category.
-// Category is inferred from the DB name (same heuristic the old table used).
-
-function _inferCategory(dbName) {
-  const n = dbName.toLowerCase();
-  if (n.includes("carne") || n.includes("picanha")) return "carne";
-  if (n.includes("cheddar") || n.includes("catupiry") || n.includes("mussarela") || n.includes("queijo")) return "queijo";
-  return "adicional";
-}
-
-// Build a derived ADDITION_ALIASES map on first use (lazy, but effectively module-init).
-const ADDITION_ALIASES = (() => {
-  const result = {};
-  for (const [word, { name, price }] of Object.entries(ADDITION_ALIAS_MAP)) {
-    const category = _inferCategory(name);
-    if (!result[word]) {
-      result[word] = { category, options: [] };
+  // Build a detailed summary for the delivery person
+  const itemLines = order.items.map((item) => {
+    let line = `• ${item.quantity || 1}x ${item.name}`;
+    if (item.additions?.length) {
+      line += ` (+ ${item.additions.map((a) => a.name).join(", ")})`;
     }
-    // Only push if this exact DB name isn't already listed
-    if (!result[word].options.some(o => o.name === name)) {
-      result[word].options.push({ name, price });
+    if (item.observation) {
+      line += ` [${item.observation}]`;
     }
+    return line;
+  }).join("\n");
+
+  const total = order.bills?.totalWithTax || order.bills?.total || 0;
+
+  const message = [
+    "🛵 *Nova entrega pronta!*",
+    "",
+    `📦 Pedido #${String(order._id).slice(-6)}`,
+    `👤 Cliente: ${order.customerDetails?.name || "N/D"}`,
+    "",
+    "📋 Itens:",
+    itemLines,
+    "",
+    `🏠 Endereço: ${order.deliveryAddress || "N/D"}`,
+    `💰 Total: R$ ${total.toFixed(2)}`,
+    `💳 Pagamento: ${order.paymentMethod || "a definir"}`,
+    order.changeNeeded ? `🪙 Troco para: R$ ${Number(order.changeFor).toFixed(2)}` : "",
+    "",
+    "🏍️ Pode iniciar a entrega! 🚀",
+  ].filter(Boolean).join("\n");
+
+  await sendWhatsAppMessage(deliveryPhone, message, process.env.OPENWA_SESSION_ID);
+  console.log(`📤 Delivery notification sent to ${deliveryPhone} for order ${order._id}`);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Existing CRUD functions (unchanged except updateOrder)
+// ─────────────────────────────────────────────────────────────────
+
+const addOrder = async (req, res, next) => {
+  try {
+    console.log("📦 Received order payload:", JSON.stringify(req.body, null, 2));
+    const order = new Order(req.body);
+    await order.save();
+    console.log("✅ Order saved:", order._id);
+    res.status(201).json({ success: true, message: "Order created!", data: order });
+  } catch (error) {
+    console.error("❌ Order creation failed:", error.message);
+    if (error.name === "ValidationError") {
+      console.error("Validation errors:", Object.keys(error.errors).map(k => `${k}: ${error.errors[k].message}`));
+    }
+    if (error.name === "CastError") {
+      console.error("Cast error:", error.path, error.value);
+    }
+    next(error);
   }
-  return result;
-})();
+};
 
-function getAdditionAlias(word) {
-  const normalized = word.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  return ADDITION_ALIASES[normalized] || null;
-}
-
-function detectUnknownAddition(rawMessage, usedWordsSet) {
-  const words = rawMessage
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(" ");
-
-  for (const word of words) {
-    if (usedWordsSet && usedWordsSet.has(word)) continue;
-    const alias = getAdditionAlias(word);
-    if (alias) return { aliasWord: word, ...alias };
+const getOrderById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return next(createHttpError(404, "Invalid id!"));
+    }
+    const order = await Order.findById(id);
+    if (!order) {
+      return next(createHttpError(404, "Order not found!"));
+    }
+    res.status(200).json({ success: true, data: order });
+  } catch (error) {
+    next(error);
   }
-  return null;
-}
+};
 
-// ─────────────────────────────────────────────
-// Order summary builder
-// ─────────────────────────────────────────────
-function buildOrderSummary(sess) {
-  const total = sess.items.reduce((sum, item) => {
-    const addPrice = (item.additions || []).reduce((s, a) => s + (a.price || 0), 0);
-    return sum + (item.price + addPrice) * (item.quantity || 1);
-  }, 0);
-
-  const tipo =
-    sess.orderType === "Dine-in"
-      ? "No local"
-      : sess.orderType === "Delivery"
-        ? `Entrega em ${sess.address || "?"}`
-        : "Para levar";
-
-  const itens = sess.items
-    .map((i) => {
-      let line = `${i.quantity}x ${i.name}`;
-      if (i.additions?.length) line += ` (+ ${i.additions.map((a) => a.name).join(", ")})`;
-      if (i.observation) line += ` [${i.observation}]`;
-      return line;
-    })
-    .join("\n");
-
-  let trocoLine = "";
-  if (sess.changeNeeded && sess.changeFor > 0) {
-    trocoLine = `\n🪙 Troco para: R$ ${Number(sess.changeFor).toFixed(2)}`;
+const getOrders = async (req, res, next) => {
+  try {
+    const orders = await Order.find().populate("table");
+    res.status(200).json({ data: orders });
+  } catch (error) {
+    next(error);
   }
+};
 
-  return { total, tipo, itens: itens + trocoLine };
-}
+const updateOrder = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
 
-// ─────────────────────────────────────────────
-// Drink disambiguation helpers
-// ─────────────────────────────────────────────
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return next(createHttpError(400, "ID inválido"));
+    }
 
-// Generic words a customer might say instead of a full product name.
-// Normalised (no accents, lowercase) so comparison is straightforward.
-const GENERIC_DRINK_WORDS = new Set([
-  "coca", "cola", "fanta", "guarana", "sprite",
-  "mate", "suco", "agua",
-]);
+    if (updates.orderStatus === "Ready") {
+      const existingOrder = await Order.findById(id);
+      if (existingOrder && !existingOrder.readyAt) {
+        updates.readyAt = new Date();
+      }
+    }
 
-// Return all products whose name contains the generic word.
-function getDrinkOptions(genericWord, products) {
-  const normWord = (genericWord || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-  return products.filter(p => {
-    const pName = p.name
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase();
-    return pName.includes(normWord);
-  });
-}
+    const order = await Order.findByIdAndUpdate(
+      id,
+      { $set: updates },
+      { new: true, runValidators: false }
+    );
 
-// Returns true when the raw message contains genericWord but NO size qualifier,
-// meaning the customer's intent is ambiguous and we need to ask which product.
-function needsDrinkDisambiguation(rawMessage, genericWord) {
-  const lower = (rawMessage || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-  if (!lower.includes(genericWord)) return false;
-  const explicitMarkers = [
-    "lata", "2l", "1l", "600ml", "350ml", "500ml",
-    "zero", "litro", "litros", "lts", "lt",
-  ];
-  return !explicitMarkers.some(marker => lower.includes(marker));
-}
+    if (!order) {
+      return next(createHttpError(404, "Pedido não encontrado"));
+    }
+
+    // 🔔 Send WhatsApp notifications when order becomes Ready
+    if (updates.orderStatus === "Ready") {
+      // 1. Notify the customer
+      await notifyCustomerOrderReady(order).catch(err =>
+        console.error("Error sending customer ready notification:", err.message)
+      );
+
+      // 2. 🆕 If it's a delivery, also notify the delivery employee
+      if (order.orderType === "Delivery") {
+        await notifyDeliveryEmployee(order).catch(err =>
+          console.error("Error sending delivery employee notification:", err.message)
+        );
+      }
+    }
+
+    res.status(200).json({ success: true, data: order });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateOrderPayment = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { paymentStatus, paymentMethod } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return next(createHttpError(400, "ID inválido"));
+    }
+
+    const order = await Order.findByIdAndUpdate(
+      id,
+      { paymentStatus, paymentMethod },
+      { new: true, runValidators: true }
+    );
+
+    if (!order) {
+      return next(createHttpError(404, "Pedido não encontrado"));
+    }
+
+    res.status(200).json({ success: true, data: order });
+  } catch (error) {
+    next(error);
+  }
+};
 
 module.exports = {
-  norm,
-  extractOrderType,
-  extractPayment,
-  extractAddress,
-  isWeakAddress,
-  extractMacarraoParts,
-  classifyStep,
-  getCasualReply,
-  SEND_MENU,
-  buildOrderSummary,
-  extractNumber,
-  getAdditionAlias,
-  detectUnknownAddition,
-  ADDITION_ALIASES,
-  GENERIC_DRINK_WORDS,
-  getDrinkOptions,
-  needsDrinkDisambiguation,
+  addOrder,
+  getOrderById,
+  getOrders,
+  updateOrder,
+  updateOrderPayment,
 };
