@@ -1,7 +1,7 @@
 const createHttpError = require("http-errors");
 const Order = require("../models/orderModel");
 const { default: mongoose } = require("mongoose");
-const axios = require("axios");   // ← added for WhatsApp notification
+const axios = require("axios");   // ← WhatsApp notification helper
 
 // ─────────────────────────────────────────────────────────────────
 // Helper: send WhatsApp text message via OpenWA
@@ -25,7 +25,7 @@ async function sendWhatsAppMessage(chatId, text, sessionId) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Send a friendly "ready" message based on order type
+// Send a friendly "ready" message to the customer
 // ─────────────────────────────────────────────────────────────────
 async function notifyCustomerOrderReady(order) {
   const chatId = order.whatsappChatId;
@@ -51,6 +51,51 @@ async function notifyCustomerOrderReady(order) {
   }
 
   await sendWhatsAppMessage(chatId, message, process.env.OPENWA_SESSION_ID);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// 🆕 Send a detailed delivery summary to the delivery employee
+// ─────────────────────────────────────────────────────────────────
+async function notifyDeliveryEmployee(order) {
+  const deliveryPhone = process.env.DELIVERY_PHONE;
+  if (!deliveryPhone) {
+    console.log(`⚠️  DELIVERY_PHONE not set – skipping employee notification for order ${order._id}`);
+    return;
+  }
+
+  // Build item lines, including additions and observations
+  const itemLines = order.items.map((item) => {
+    let line = `• ${item.quantity || 1}x ${item.name}`;
+    if (item.additions?.length) {
+      line += ` (+ ${item.additions.map((a) => a.name).join(", ")})`;
+    }
+    if (item.observation) {
+      line += ` [${item.observation}]`;
+    }
+    return line;
+  }).join("\n");
+
+  const total = order.bills?.totalWithTax || order.bills?.total || 0;
+
+  const message = [
+    "🛵 *Nova entrega pronta!*",
+    "",
+    `📦 Pedido #${String(order._id).slice(-6)}`,
+    `👤 Cliente: ${order.customerDetails?.name || "N/D"}`,
+    "",
+    "📋 Itens:",
+    itemLines,
+    "",
+    `🏠 Endereço: ${order.deliveryAddress || "N/D"}`,
+    `💰 Total: R$ ${total.toFixed(2)}`,
+    `💳 Pagamento: ${order.paymentMethod || "a definir"}`,
+    order.changeNeeded ? `🪙 Troco para: R$ ${Number(order.changeFor).toFixed(2)}` : "",
+    "",
+    "🏍️ Pode iniciar a entrega! 🚀",
+  ].filter(Boolean).join("\n");
+
+  await sendWhatsAppMessage(deliveryPhone, message, process.env.OPENWA_SESSION_ID);
+  console.log(`📤 Delivery notification sent to ${deliveryPhone} for order ${order._id}`);
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -131,9 +176,17 @@ const updateOrder = async (req, res, next) => {
 
     // 🔔 Send WhatsApp notification if the order just moved to "Ready"
     if (updates.orderStatus === "Ready") {
+      // 1. Notify the customer
       await notifyCustomerOrderReady(order).catch(err =>
-        console.error("Error sending ready notification:", err.message)
+        console.error("Error sending customer ready notification:", err.message)
       );
+
+      // 2. 🆕 If it's a delivery, also notify the delivery employee
+      if (order.orderType === "Delivery") {
+        await notifyDeliveryEmployee(order).catch(err =>
+          console.error("Error sending delivery employee notification:", err.message)
+        );
+      }
     }
 
     res.status(200).json({ success: true, data: order });
