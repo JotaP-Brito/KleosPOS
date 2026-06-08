@@ -97,10 +97,18 @@ function extractMacarraoParts(msg) {
     : lower.includes("bolonhesa")
       ? "bolonhesa"
       : null;
-  const size = /\b(p|g)\b/.test(lower) ? lower.match(/\b(p|g|grande|pequeno|Grande|Pequeno)\b/)[0] : null;
+
+  // Normalise any size word to "p" or "g"
+  const sizeMatch = lower.match(/\b(p|g|grande|pequeno|gigante|pequena)\b/i);
+  let size = null;
+  if (sizeMatch) {
+    const raw = sizeMatch[1].toLowerCase();
+    if (raw === "p" || raw === "pequeno" || raw === "pequena") size = "p";
+    else if (raw === "g" || raw === "grande" || raw === "gigante") size = "g";
+  }
+
   return { type, size };
 }
-
 // ─────────────────────────────────────────────
 // Step-based classifier
 // ─────────────────────────────────────────────
