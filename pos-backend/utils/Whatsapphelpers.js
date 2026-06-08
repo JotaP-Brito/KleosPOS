@@ -97,7 +97,7 @@ function extractMacarraoParts(msg) {
     : lower.includes("bolonhesa")
       ? "bolonhesa"
       : null;
-  const size = /\b(p|g)\b/.test(lower) ? lower.match(/\b(p|g)\b/)[0] : null;
+  const size = /\b(p|g)\b/.test(lower) ? lower.match(/\b(p|g|grande|pequeno|Grande|Pequeno)\b/)[0] : null;
   return { type, size };
 }
 
