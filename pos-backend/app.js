@@ -171,6 +171,33 @@ cron.schedule("0 0 * * *", async () => {
       paymentMethod: "Pix"
     });
 
+    const sendWhatsAppMessage = require("./utils/sendWhatsAppMessage");
+
+    // ... inside your existing cron.schedule callback, after await DailySummary.findOneAndUpdate ...
+
+    console.log(`📊 Resumo automático guardado para ${dateStr}`);
+
+    // 🆕 Send summary to admin WhatsApp
+    const adminPhone = process.env.ADMIN_PHONE;
+    if (adminPhone) {
+      const msg = [
+        `📊 *Resumo do dia ${dateStr}*`,
+        "",
+        `🧾 Pedidos: ${orderCount}`,
+        `✅ Finalizados: ${completedCount}`,
+        `💰 Receita: R$ ${revenue.toFixed(2)}`,
+        "",
+        `💵 Dinheiro: ${cashCount}`,
+        `💳 Cartão: ${cardCount}`,
+        `🟣 Pix: ${pixCount}`,
+        `⏱️ Tempo médio: ${averageTimeMinutes} min`,
+      ].join("\n");
+
+      await sendWhatsAppMessage(adminPhone, msg).catch(err =>
+        console.error("Erro ao enviar resumo diário:", err.message)
+      );
+    }
+
     const avgTimeData = await Order.aggregate([
       { $match: { readyAt: { $gte: start, $lt: end, $ne: null } } },
       { $project: { timeDiff: { $subtract: ["$readyAt", "$orderDate"] } } },
