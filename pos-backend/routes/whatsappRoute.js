@@ -42,6 +42,7 @@ const processedDeliveries = new Set();
 const processedMessageIds = new Set();
 const MAX_DELIVERY_CACHE = 100;
 const MAX_MSGID_CACHE = 500;
+const sendWhatsAppMessage = require("../utils/sendWhatsAppMessage");
 
 function isDuplicate(deliveryId, messageId) {
   if (deliveryId && processedDeliveries.has(deliveryId)) {
