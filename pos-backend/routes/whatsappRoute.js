@@ -176,9 +176,9 @@ function enrichWithAdditions(parsedItems, rawMessage, products, additions) {
 
 // ETA in minutes by order type (configurable without touching handler logic)
 const ETA_MINUTES = {
-  Takeaway: process.env.ETA_TAKEAWAY  || 15,
-  "Dine-in": process.env.ETA_DINEIN  || 20,
-  Delivery:  process.env.ETA_DELIVERY || 40,
+  Takeaway: process.env.ETA_TAKEAWAY || 15,
+  "Dine-in": process.env.ETA_DINEIN || 20,
+  Delivery: process.env.ETA_DELIVERY || 40,
 };
 
 function etaMessage(orderType) {
@@ -1092,6 +1092,42 @@ router.post("/webhook", async (req, res) => {
       }
     }
 
+    // ---- Admin-only “métricas” command ----
+    const lowerMsg = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    if (lowerMsg === "metricas" || lowerMsg === "métricas") {
+      const adminPhone = process.env.ADMIN_PHONE;
+      if (adminPhone && from === adminPhone) {
+        const now = new Date();
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+        const Order = require("../models/orderModel");
+        const orderCount = await Order.countDocuments({ orderDate: { $gte: start, $lt: end } });
+        const revenueData = await Order.aggregate([
+          { $match: { orderDate: { $gte: start, $lt: end } } },
+          { $group: { _id: null, total: { $sum: "$bills.totalWithTax" } } },
+        ]);
+        const revenue = revenueData[0]?.total || 0;
+        const cashCount = await Order.countDocuments({ orderDate: { $gte: start, $lt: end }, paymentMethod: "Dinheiro", paymentStatus: "Paid" });
+        const cardCount = await Order.countDocuments({ orderDate: { $gte: start, $lt: end }, paymentMethod: "Cartão", paymentStatus: "Paid" });
+        const pixCount = await Order.countDocuments({ orderDate: { $gte: start, $lt: end }, paymentMethod: "Pix", paymentStatus: "Paid" });
+
+        const msg = [
+          "📊 *Hoje até agora*",
+          "",
+          `🧾 Pedidos: ${orderCount}`,
+          `💰 Receita: R$ ${revenue.toFixed(2)}`,
+          "",
+          `💵 Dinheiro: ${cashCount}`,
+          `💳 Cartão: ${cardCount}`,
+          `🟣 Pix: ${pixCount}`,
+        ].join("\n");
+
+        await sendWhatsAppMessage(from, msg, sessionId);
+      }
+      return res.json({ status: "metrics_sent" });
+    }
+
     // ---- State machine ----
     const ctx = { phone, from, rawMessage, sessionId, session, contact };
 
@@ -1101,7 +1137,7 @@ router.post("/webhook", async (req, res) => {
     // A visited guard prevents infinite loops if a handler forgets to advance.
     const visited = new Set();
 
-    for (;;) {
+    for (; ;) {
       const currentStep = getSession(phone).step;
       if (visited.has(currentStep)) break;
       visited.add(currentStep);
