@@ -1,6 +1,6 @@
 const path = require("path");
 const fs = require("fs");
-const axios = require("axios");   // 👈 needed for the auto‑start function
+const axios = require("axios");
 
 // Try loading .env, fallback to env.defaults if .env doesn't exist
 const envPath = path.join(__dirname, ".env");
@@ -58,7 +58,7 @@ app.use("/api/product", require("./routes/productRoute"));
 app.use("/api/category", require("./routes/categoryRoute"));
 app.use("/api/summary", require("./routes/summaryRoute"));
 app.use("/api/addition", require("./routes/additionRoute"));
-app.use("/api/whatsapp", require("./routes/whatsappRoute"));   // 👈 WhatsApp webhook
+app.use("/api/whatsapp", require("./routes/whatsappRoute"));
 app.use("/api/order", require("./routes/deliveryFeeRoute"));
 app.use("/api/bot-status", require("./routes/botStatusRoute"));
 
@@ -66,13 +66,14 @@ app.use("/api/bot-status", require("./routes/botStatusRoute"));
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/public", express.static("public"));
 
-// ---------- Serve o frontend compilado ----------
-app.use(express.static(path.join(__dirname, "../pos-frontend/dist")));
+// ---------- Serve the frontend ----------
+const frontendPath = process.env.STATIC_FRONTEND_PATH || path.join(__dirname, "../pos-frontend/dist");
+app.use(express.static(frontendPath));
 
-// Qualquer outra rota que não seja API → devolve index.html (React Router)
+// Any non‑API route → index.html (React Router)
 app.get("*", (req, res, next) => {
   if (req.path.startsWith("/api")) return next();
-  res.sendFile(path.join(__dirname, "../pos-frontend/dist/index.html"));
+  res.sendFile(path.join(frontendPath, "index.html"));
 });
 
 // Global Error Handler
@@ -90,13 +91,11 @@ async function ensureOpenWASessionActive() {
   }
 
   try {
-    // 1. Check session status
     const { data: session } = await axios.get(
       `${OPENWA_BASE}/api/sessions/${SESSION_ID}`,
       { headers: { "X-API-Key": API_KEY } }
     );
 
-    // 2. Start ONLY if the session is truly disconnected or stopped
     if (session.status === "disconnected" || session.status === "stopped") {
       console.log(`⚡ Session ${SESSION_ID} is "${session.status}" – starting...`);
       await axios.post(
@@ -109,7 +108,6 @@ async function ensureOpenWASessionActive() {
       console.log(`✅ Session ${SESSION_ID} is ${session.status} – no need to start`);
     }
 
-    // 3. Ensure webhook is registered
     const { data: webhooks } = await axios.get(
       `${OPENWA_BASE}/api/sessions/${SESSION_ID}/webhooks`,
       { headers: { "X-API-Key": API_KEY } }
@@ -134,7 +132,7 @@ async function ensureOpenWASessionActive() {
   }
 }
 
-// ---------- Cron job: Guardar resumo diário à meia‑noite (horário de Brasília) ----------
+// ---------- Cron job: save daily summary at midnight (Brasília time) ----------
 cron.schedule("0 0 * * *", async () => {
   try {
     const yesterday = new Date();
@@ -171,33 +169,6 @@ cron.schedule("0 0 * * *", async () => {
       paymentMethod: "Pix"
     });
 
-    const sendWhatsAppMessage = require("./utils/sendWhatsAppMessage");
-
-    // ... inside your existing cron.schedule callback, after await DailySummary.findOneAndUpdate ...
-
-    console.log(`📊 Resumo automático guardado para ${dateStr}`);
-
-    // 🆕 Send summary to admin WhatsApp
-    const adminPhone = process.env.ADMIN_PHONE;
-    if (adminPhone) {
-      const msg = [
-        `📊 *Resumo do dia ${dateStr}*`,
-        "",
-        `🧾 Pedidos: ${orderCount}`,
-        `✅ Finalizados: ${completedCount}`,
-        `💰 Receita: R$ ${revenue.toFixed(2)}`,
-        "",
-        `💵 Dinheiro: ${cashCount}`,
-        `💳 Cartão: ${cardCount}`,
-        `🟣 Pix: ${pixCount}`,
-        `⏱️ Tempo médio: ${averageTimeMinutes} min`,
-      ].join("\n");
-
-      await sendWhatsAppMessage(adminPhone, msg).catch(err =>
-        console.error("Erro ao enviar resumo diário:", err.message)
-      );
-    }
-
     const avgTimeData = await Order.aggregate([
       { $match: { readyAt: { $gte: start, $lt: end, $ne: null } } },
       { $project: { timeDiff: { $subtract: ["$readyAt", "$orderDate"] } } },
@@ -222,6 +193,29 @@ cron.schedule("0 0 * * *", async () => {
     );
 
     console.log(`📊 Resumo automático guardado para ${dateStr}`);
+
+    // 🆕 Send summary to admin WhatsApp
+    const adminPhone = process.env.ADMIN_PHONE;
+    if (adminPhone) {
+      const sendWhatsAppMessage = require("./utils/sendWhatsAppMessage");
+      const msg = [
+        `📊 *Resumo do dia ${dateStr}*`,
+        "",
+        `🧾 Pedidos: ${orderCount}`,
+        `✅ Finalizados: ${completedCount}`,
+        `💰 Receita: R$ ${revenue.toFixed(2)}`,
+        "",
+        `💵 Dinheiro: ${cashCount}`,
+        `💳 Cartão: ${cardCount}`,
+        `🟣 Pix: ${pixCount}`,
+        `⏱️ Tempo médio: ${averageTimeMinutes} min`,
+      ].join("\n");
+
+      await sendWhatsAppMessage(adminPhone, msg).catch(err =>
+        console.error("Erro ao enviar resumo diário:", err.message)
+      );
+    }
+
   } catch (error) {
     console.error("Erro no resumo diário automático:", error);
   }
@@ -229,8 +223,8 @@ cron.schedule("0 0 * * *", async () => {
   timezone: "America/Sao_Paulo"
 });
 
-// ---------- Start the server (only once) ----------
+// ---------- Start the server ----------
 app.listen(PORT, () => {
   console.log(`☑️  POS Server is listening on port ${PORT}`);
-  ensureOpenWASessionActive();   // ← auto‑start WhatsApp session & webhook
+  ensureOpenWASessionActive();
 });

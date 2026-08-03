@@ -1094,7 +1094,6 @@ router.post("/webhook", async (req, res) => {
     }
 
     // ---- Admin-only “métricas” command ----
-    const lowerMsg = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     if (lowerMsg === "metricas" || lowerMsg === "métricas") {
       const adminPhone = process.env.ADMIN_PHONE;
       if (adminPhone && from === adminPhone) {
