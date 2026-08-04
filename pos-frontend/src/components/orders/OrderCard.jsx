@@ -1,8 +1,7 @@
-// components/orders/OrderCard.jsx
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDispatch } from "react-redux";
-import { FaLongArrowAltRight, FaUserFriends } from "react-icons/fa";
+import { FaLongArrowAltRight, FaCheckCircle } from "react-icons/fa";
 import { MdPayment, MdPrint, MdTimer, MdDeliveryDining } from "react-icons/md";
 import { FiEdit } from "react-icons/fi";
 import { formatDateAndTime, getAvatarName } from "../../utils/index";
@@ -35,8 +34,7 @@ const OrderCard = ({
   onShowPayment,
   onShowInvoice,
   onShowDeliveryFee,
-  onSplitBill,      // nova prop
-  onSplitPayment,   // nova prop
+  onCharge,            // 🆕
 }) => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -63,7 +61,6 @@ const OrderCard = ({
     }
   };
 
-  // Payment badge com suporte ao status "PartiallyPaid"
   const paymentBadge = isPendingDeliveryFee ? (
     <span className="text-orange-400 text-sm bg-orange-400/10 px-2 py-0.5 rounded-full animate-pulse">
       🛵 Taxa pendente
@@ -91,13 +88,13 @@ const OrderCard = ({
     navigate("/menu");
   };
 
+  const paidIndexes = order.paidItems || [];
+
   return (
-    <div
-      className={`w-full min-w-0 bg-[#262626] p-5 rounded-lg mb-4 ${
-        isPendingDeliveryFee ? "ring-2 ring-orange-400/50" : ""
-      }`}
-    >
-      {/* Endereço de entrega (se aplicável) */}
+    <div className={`w-full min-w-0 bg-[#262626] p-5 rounded-lg mb-4 ${
+      isPendingDeliveryFee ? "ring-2 ring-orange-400/50" : ""
+    }`}>
+      {/* Endereço de entrega */}
       {order.orderType === "Delivery" && order.deliveryAddress && (
         <div className="flex items-center gap-2 mb-3 bg-[#1f1f1f] rounded-lg px-3 py-2">
           <MdDeliveryDining size={16} className="text-[#f6b100] shrink-0" />
@@ -124,8 +121,7 @@ const OrderCard = ({
               <p className="text-[#ababab] text-base flex items-center gap-1">
                 {order.orderType === "Dine-in" ? (
                   <>
-                    Mesa <FaLongArrowAltRight className="text-[#ababab] ml-1 inline" />{" "}
-                    {order.table?.tableNo}
+                    Mesa <FaLongArrowAltRight className="text-[#ababab] ml-1 inline" /> {order.table?.tableNo}
                   </>
                 ) : (
                   getOrderTypeDisplay()
@@ -151,7 +147,7 @@ const OrderCard = ({
         <p>{formatDateAndTime(order.orderDate)}</p>
       </div>
 
-      {/* Tabela de itens */}
+      {/* Tabela de itens com checkmark */}
       <div className="mt-3 bg-[#1f1f1f] rounded-lg p-3 max-h-48 overflow-y-auto">
         <table className="w-full text-sm text-[#ababab]">
           <thead>
@@ -159,6 +155,7 @@ const OrderCard = ({
               <th className="text-left pb-1 font-medium">Item</th>
               <th className="text-center pb-1 font-medium w-10">Qtd</th>
               <th className="text-right pb-1 font-medium w-20">Total</th>
+              <th className="text-center pb-1 font-medium w-8"></th>
             </tr>
           </thead>
           <tbody>
@@ -167,6 +164,7 @@ const OrderCard = ({
                 ? item.additions.reduce((sum, a) => sum + a.price, 0)
                 : 0;
               const itemTotal = (item.price + additionsTotal) * (item.quantity || 1);
+              const isPaid = paidIndexes.includes(idx);
               return (
                 <tr key={idx} className="border-b border-[#2a2a2a] last:border-0">
                   <td className="py-1 text-left text-[#f5f5f5]">
@@ -177,14 +175,15 @@ const OrderCard = ({
                       </div>
                     )}
                     {item.observation && (
-                      <div className="text-xs text-yellow-400 italic ml-2">
-                        ⚠️ {item.observation}
-                      </div>
+                      <div className="text-xs text-yellow-400 italic ml-2">⚠️ {item.observation}</div>
                     )}
                   </td>
                   <td className="py-1 text-center">{item.quantity || 1}</td>
                   <td className="py-1 text-right text-[#f5f5f5] font-medium">
                     R$ {itemTotal.toFixed(2)}
+                  </td>
+                  <td className="py-1 text-center">
+                    {isPaid && <FaCheckCircle className="text-green-400 inline" size={14} />}
                   </td>
                 </tr>
               );
@@ -192,26 +191,6 @@ const OrderCard = ({
           </tbody>
         </table>
       </div>
-
-      {/* 🆕 Resumo das divisões (se existirem) */}
-      {order.splits && order.splits.length > 0 && (
-        <div className="mt-3 bg-[#1f1f1f] rounded-lg p-2">
-          <div className="flex flex-wrap gap-2 text-xs">
-            {order.splits.map((s) => (
-              <span
-                key={s._id}
-                className={`px-2 py-0.5 rounded ${
-                  s.paymentStatus === "Paid"
-                    ? "bg-green-400/10 text-green-400"
-                    : "bg-yellow-400/10 text-yellow-400"
-                }`}
-              >
-                {s.name}: R$ {s.amount.toFixed(2)} {s.paymentStatus === "Paid" ? "✓" : ""}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Rodapé cronómetro + total */}
       <div className="flex items-center justify-between mt-4">
@@ -230,70 +209,38 @@ const OrderCard = ({
 
       {/* Botões de ação */}
       <div className="flex justify-end gap-4 mt-3 pt-2 border-t border-[#3a3a3a]">
-        <button
-          onClick={handleEdit}
-          className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base"
-          title="Editar pedido"
-        >
+        <button onClick={handleEdit} className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base" title="Editar pedido">
           <FiEdit size={18} />
           <span>Editar</span>
         </button>
 
-        {/* 🆕 Dividir conta (aparece se não houver divisões ainda) */}
-        {(!order.splits || order.splits.length === 0) && onSplitBill && (
+        {/* 🆕 Botão Cobrar */}
+        {order.paymentStatus !== "Paid" && order.paymentStatus !== "PendingDeliveryFee" && onCharge && (
           <button
-            onClick={() => onSplitBill(order)}
-            className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base"
-            title="Dividir conta"
-          >
-            <FaUserFriends size={18} />
-            <span>Dividir</span>
-          </button>
-        )}
-
-        {/* 🆕 Pagar parte (aparece se houver divisões não pagas) */}
-        {order.splits?.some((s) => s.paymentStatus !== "Paid") && onSplitPayment && (
-          <button
-            onClick={() => onSplitPayment(order)}
+            onClick={() => onCharge(order)}
             className="text-[#f6b100] hover:text-yellow-400 transition-colors flex items-center gap-1 text-base"
-            title="Pagar parte"
+            title="Cobrar itens selecionados"
           >
-            <FaUserFriends size={18} />
-            <span>Pagar parte</span>
+            <FaCheckCircle size={18} />
+            <span>Cobrar</span>
           </button>
         )}
 
-        {/* Taxa de entrega (já existente) */}
         {isPendingDeliveryFee && onShowDeliveryFee && (
-          <button
-            onClick={() => onShowDeliveryFee(order)}
-            className="text-orange-400 hover:text-orange-300 transition-colors flex items-center gap-1 text-base font-semibold"
-            title="Definir taxa de entrega"
-          >
+          <button onClick={() => onShowDeliveryFee(order)} className="text-orange-400 hover:text-orange-300 transition-colors flex items-center gap-1 text-base font-semibold" title="Definir taxa de entrega">
             <MdDeliveryDining size={20} />
             <span>Definir Taxa</span>
           </button>
         )}
 
-        {/* Pagamento completo (oculto quando há divisões não pagas ou entrega pendente) */}
-        {order.paymentStatus !== "Paid" &&
-          order.paymentStatus !== "PendingDeliveryFee" &&
-          order.paymentStatus !== "PartiallyPaid" && (
-            <button
-              onClick={() => onShowPayment(order)}
-              className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base"
-              title="Registar pagamento"
-            >
-              <MdPayment size={22} />
-              <span>Pagamento</span>
-            </button>
-          )}
+        {order.paymentStatus !== "Paid" && order.paymentStatus !== "PendingDeliveryFee" && order.paymentStatus !== "PartiallyPaid" && (
+          <button onClick={() => onShowPayment(order)} className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base" title="Registar pagamento">
+            <MdPayment size={22} />
+            <span>Pagamento</span>
+          </button>
+        )}
 
-        <button
-          onClick={() => onShowInvoice(order)}
-          className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base"
-          title="Imprimir recibo"
-        >
+        <button onClick={() => onShowInvoice(order)} className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base" title="Imprimir recibo">
           <MdPrint size={22} />
           <span>Recibo</span>
         </button>

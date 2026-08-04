@@ -1,4 +1,3 @@
-// pages/Orders.jsx
 import React, { useState, useEffect, useRef } from "react";
 import BottomNav from "../components/shared/BottomNav";
 import OrderCard from "../components/orders/OrderCard";
@@ -9,8 +8,7 @@ import { enqueueSnackbar } from "notistack";
 import PaymentModal from "../components/orders/PaymentModal";
 import DeliveryFeeModal from "../components/orders/DeliveryFeeModal";
 import Invoice from "../components/invoice/Invoice";
-import SplitBillModal from "../components/orders/SplitBillModal";
-import SplitPaymentModal from "../components/orders/SplitPaymentModal";
+import ChargeModal from "../components/orders/ChargeModal";   // 🆕
 
 const Orders = () => {
   const [status, setStatus] = useState("all");
@@ -18,12 +16,8 @@ const Orders = () => {
   const [showPayment, setShowPayment] = useState(false);
   const [showInvoice, setShowInvoice] = useState(false);
   const [showDeliveryFee, setShowDeliveryFee] = useState(false);
+  const [showCharge, setShowCharge] = useState(false);   // 🆕
 
-  // 🆕 Novos estados para divisão de conta
-  const [showSplitBill, setShowSplitBill] = useState(false);
-  const [showSplitPayment, setShowSplitPayment] = useState(false);
-
-  // Prevent modal from re‑opening after manual close
   const dismissedIdsRef = useRef(new Set());
 
   useEffect(() => {
@@ -46,7 +40,6 @@ const Orders = () => {
     (order) => !["Completed", "Cancelled"].includes(order.orderStatus)
   );
 
-  // Auto-open DeliveryFeeModal only for un‑dismissed orders
   useEffect(() => {
     if (showDeliveryFee) return;
     const pending = activeOrders.find(
@@ -92,20 +85,13 @@ const Orders = () => {
     setSelectedOrder(null);
   };
 
-  // 🆕 Handlers para divisão de conta
-  const handleSplitBill = (order) => {
+  const handleCharge = (order) => {
     setSelectedOrder(order);
-    setShowSplitBill(true);
-  };
-
-  const handleSplitPayment = (order) => {
-    setSelectedOrder(order);
-    setShowSplitPayment(true);
+    setShowCharge(true);
   };
 
   return (
     <section className="bg-[#1f1f1f] h-[calc(100vh-5rem)] flex flex-col">
-      {/* Cabeçalho fixo */}
       <div className="flex items-center justify-between px-10 py-4 shrink-0">
         <div className="flex items-center gap-4">
           <BackButton />
@@ -129,7 +115,6 @@ const Orders = () => {
         </div>
       </div>
 
-      {/* Grid de pedidos */}
       <div className="flex-1 overflow-y-auto px-10 py-4 pb-20">
         <div className="grid grid-cols-3 gap-4">
           {filteredOrders.length > 0 ? (
@@ -140,8 +125,7 @@ const Orders = () => {
                 onShowPayment={handleShowPayment}
                 onShowInvoice={handleShowInvoice}
                 onShowDeliveryFee={handleShowDeliveryFee}
-                onSplitBill={handleSplitBill}           // 🆕
-                onSplitPayment={handleSplitPayment}     // 🆕
+                onCharge={handleCharge}       // 🆕
               />
             ))
           ) : (
@@ -150,7 +134,6 @@ const Orders = () => {
         </div>
       </div>
 
-      {/* Modais existentes */}
       {showPayment && selectedOrder && (
         <PaymentModal order={selectedOrder} onClose={() => setShowPayment(false)} />
       )}
@@ -160,13 +143,8 @@ const Orders = () => {
       {showDeliveryFee && selectedOrder && (
         <DeliveryFeeModal order={selectedOrder} onClose={closeDeliveryFee} />
       )}
-
-      {/* 🆕 Novos modais para divisão de conta */}
-      {showSplitBill && selectedOrder && (
-        <SplitBillModal order={selectedOrder} onClose={() => setShowSplitBill(false)} />
-      )}
-      {showSplitPayment && selectedOrder && (
-        <SplitPaymentModal order={selectedOrder} onClose={() => setShowSplitPayment(false)} />
+      {showCharge && selectedOrder && (
+        <ChargeModal order={selectedOrder} onClose={() => setShowCharge(false)} />
       )}
 
       <BottomNav />
