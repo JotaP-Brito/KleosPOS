@@ -1,4 +1,3 @@
-// src/https/index.js
 import { axiosWrapper } from "./axiosWrapper";
 
 // Auth Endpoints
@@ -25,19 +24,14 @@ export const getOrders = () => axiosWrapper.get("/order");
 export const updateOrderStatus = ({ orderId, orderStatus }) =>
   axiosWrapper.put(`/order/${orderId}`, { orderStatus });
 
-// Update entire order (used for editing)
 export const updateOrder = (id, data) => axiosWrapper.put(`/order/${id}`, data);
 
-// Payment update (USED BY PaymentModal)
 export const updateOrderPayment = ({ orderId, paymentStatus, paymentMethod }) =>
   axiosWrapper.put(`/order/${orderId}/payment`, { paymentStatus, paymentMethod });
 
-// 🆕 Bill splitting endpoints
-export const saveOrderSplits = (orderId, splits) =>
-  axiosWrapper.put(`/order/${orderId}/splits`, { splits });
-
-export const paySplit = (orderId, splitId, paymentMethod) =>
-  axiosWrapper.put(`/order/${orderId}/splits/${splitId}/pay`, { paymentMethod });
+// 🆕 Cobrar itens selecionados
+export const chargeOrderItems = (orderId, itemIndexes) =>
+  axiosWrapper.put(`/order/${orderId}/charge`, { itemIndexes });
 
 // Addition Endpoints
 export const getAdditions = () => axiosWrapper.get("/addition");
