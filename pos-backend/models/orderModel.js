@@ -1,6 +1,32 @@
 const mongoose = require("mongoose");
 
 const orderSchema = new mongoose.Schema({
+    paymentStatus: {
+    type: String,
+    enum: ["Pending", "PendingDeliveryFee", "PartiallyPaid", "Paid"],
+    default: "Pending",
+  },
+
+  splits: [
+    {
+      name: { type: String, required: true },
+      amount: { type: Number, required: true },
+      items: [
+        {
+          name: String,
+          price: Number,
+          quantity: Number,
+          additions: [],
+          observation: String,
+        },
+      ],
+      paymentStatus: {
+        type: String,
+        enum: ["Pending", "Paid"],
+        default: "Pending",
+      },
+    },
+  ],
     customerDetails: {
         name: { type: String, required: true },
         phone: { type: String, required: true },
