@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDispatch } from "react-redux";
-import { FaLongArrowAltRight } from "react-icons/fa";
+import { FaLongArrowAltRight, FaUserFriends } from "react-icons/fa";
 import { MdPayment, MdPrint, MdTimer, MdDeliveryDining } from "react-icons/md";
 import { FiEdit } from "react-icons/fi";
 import { formatDateAndTime, getAvatarName } from "../../utils/index";
@@ -30,12 +30,18 @@ const useElapsedTime = (startDate, status) => {
   return elapsed;
 };
 
-const OrderCard = ({ order, onShowPayment, onShowInvoice, onShowDeliveryFee }) => {
+const OrderCard = ({
+  order,
+  onShowPayment,
+  onShowInvoice,
+  onShowDeliveryFee,
+  onSplitBill,      // nova prop
+  onSplitPayment,   // nova prop
+}) => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const elapsed = useElapsedTime(order.orderDate, order.orderStatus);
 
-  // ✅ True when this delivery order is waiting for the employee to set the fee
   const isPendingDeliveryFee =
     order.orderType === "Delivery" && order.paymentStatus === "PendingDeliveryFee";
 
@@ -57,13 +63,15 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice, onShowDeliveryFee }) =
     }
   };
 
-  // ✅ Payment badge – show a distinct amber "Taxa pendente" badge for delivery fee orders
+  // Payment badge com suporte ao status "PartiallyPaid"
   const paymentBadge = isPendingDeliveryFee ? (
     <span className="text-orange-400 text-sm bg-orange-400/10 px-2 py-0.5 rounded-full animate-pulse">
       🛵 Taxa pendente
     </span>
   ) : order.paymentStatus === "Paid" ? (
     <span className="text-green-400 text-sm bg-green-400/10 px-2 py-0.5 rounded-full">Pago</span>
+  ) : order.paymentStatus === "PartiallyPaid" ? (
+    <span className="text-blue-400 text-sm bg-blue-400/10 px-2 py-0.5 rounded-full">Parcial</span>
   ) : (
     <span className="text-yellow-400 text-sm bg-yellow-400/10 px-2 py-0.5 rounded-full">Pendente</span>
   );
@@ -84,11 +92,12 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice, onShowDeliveryFee }) =
   };
 
   return (
-    <div className={`w-full min-w-0 bg-[#262626] p-5 rounded-lg mb-4 ${
-      isPendingDeliveryFee ? "ring-2 ring-orange-400/50" : ""
-    }`}>
-
-      {/* ✅ NEW: delivery address bar shown for delivery orders */}
+    <div
+      className={`w-full min-w-0 bg-[#262626] p-5 rounded-lg mb-4 ${
+        isPendingDeliveryFee ? "ring-2 ring-orange-400/50" : ""
+      }`}
+    >
+      {/* Endereço de entrega (se aplicável) */}
       {order.orderType === "Delivery" && order.deliveryAddress && (
         <div className="flex items-center gap-2 mb-3 bg-[#1f1f1f] rounded-lg px-3 py-2">
           <MdDeliveryDining size={16} className="text-[#f6b100] shrink-0" />
@@ -114,7 +123,10 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice, onShowDeliveryFee }) =
               </h1>
               <p className="text-[#ababab] text-base flex items-center gap-1">
                 {order.orderType === "Dine-in" ? (
-                  <>Mesa <FaLongArrowAltRight className="text-[#ababab] ml-1 inline" /> {order.table?.tableNo}</>
+                  <>
+                    Mesa <FaLongArrowAltRight className="text-[#ababab] ml-1 inline" />{" "}
+                    {order.table?.tableNo}
+                  </>
                 ) : (
                   getOrderTypeDisplay()
                 )}
@@ -165,7 +177,9 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice, onShowDeliveryFee }) =
                       </div>
                     )}
                     {item.observation && (
-                      <div className="text-xs text-yellow-400 italic ml-2">⚠️ {item.observation}</div>
+                      <div className="text-xs text-yellow-400 italic ml-2">
+                        ⚠️ {item.observation}
+                      </div>
                     )}
                   </td>
                   <td className="py-1 text-center">{item.quantity || 1}</td>
@@ -178,6 +192,26 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice, onShowDeliveryFee }) =
           </tbody>
         </table>
       </div>
+
+      {/* 🆕 Resumo das divisões (se existirem) */}
+      {order.splits && order.splits.length > 0 && (
+        <div className="mt-3 bg-[#1f1f1f] rounded-lg p-2">
+          <div className="flex flex-wrap gap-2 text-xs">
+            {order.splits.map((s) => (
+              <span
+                key={s._id}
+                className={`px-2 py-0.5 rounded ${
+                  s.paymentStatus === "Paid"
+                    ? "bg-green-400/10 text-green-400"
+                    : "bg-yellow-400/10 text-yellow-400"
+                }`}
+              >
+                {s.name}: R$ {s.amount.toFixed(2)} {s.paymentStatus === "Paid" ? "✓" : ""}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Rodapé cronómetro + total */}
       <div className="flex items-center justify-between mt-4">
@@ -205,7 +239,31 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice, onShowDeliveryFee }) =
           <span>Editar</span>
         </button>
 
-        {/* ✅ NEW: show "Definir Taxa" button for pending delivery fee orders */}
+        {/* 🆕 Dividir conta (aparece se não houver divisões ainda) */}
+        {(!order.splits || order.splits.length === 0) && onSplitBill && (
+          <button
+            onClick={() => onSplitBill(order)}
+            className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base"
+            title="Dividir conta"
+          >
+            <FaUserFriends size={18} />
+            <span>Dividir</span>
+          </button>
+        )}
+
+        {/* 🆕 Pagar parte (aparece se houver divisões não pagas) */}
+        {order.splits?.some((s) => s.paymentStatus !== "Paid") && onSplitPayment && (
+          <button
+            onClick={() => onSplitPayment(order)}
+            className="text-[#f6b100] hover:text-yellow-400 transition-colors flex items-center gap-1 text-base"
+            title="Pagar parte"
+          >
+            <FaUserFriends size={18} />
+            <span>Pagar parte</span>
+          </button>
+        )}
+
+        {/* Taxa de entrega (já existente) */}
         {isPendingDeliveryFee && onShowDeliveryFee && (
           <button
             onClick={() => onShowDeliveryFee(order)}
@@ -217,16 +275,19 @@ const OrderCard = ({ order, onShowPayment, onShowInvoice, onShowDeliveryFee }) =
           </button>
         )}
 
-        {order.paymentStatus !== "Paid" && order.paymentStatus !== "PendingDeliveryFee" && (
-          <button
-            onClick={() => onShowPayment(order)}
-            className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base"
-            title="Registar pagamento"
-          >
-            <MdPayment size={22} />
-            <span>Pagamento</span>
-          </button>
-        )}
+        {/* Pagamento completo (oculto quando há divisões não pagas ou entrega pendente) */}
+        {order.paymentStatus !== "Paid" &&
+          order.paymentStatus !== "PendingDeliveryFee" &&
+          order.paymentStatus !== "PartiallyPaid" && (
+            <button
+              onClick={() => onShowPayment(order)}
+              className="text-[#ababab] hover:text-white transition-colors flex items-center gap-1 text-base"
+              title="Registar pagamento"
+            >
+              <MdPayment size={22} />
+              <span>Pagamento</span>
+            </button>
+          )}
 
         <button
           onClick={() => onShowInvoice(order)}

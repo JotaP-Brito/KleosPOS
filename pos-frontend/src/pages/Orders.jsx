@@ -9,6 +9,8 @@ import { enqueueSnackbar } from "notistack";
 import PaymentModal from "../components/orders/PaymentModal";
 import DeliveryFeeModal from "../components/orders/DeliveryFeeModal";
 import Invoice from "../components/invoice/Invoice";
+import SplitBillModal from "../components/orders/SplitBillModal";
+import SplitPaymentModal from "../components/orders/SplitPaymentModal";
 
 const Orders = () => {
   const [status, setStatus] = useState("all");
@@ -17,7 +19,11 @@ const Orders = () => {
   const [showInvoice, setShowInvoice] = useState(false);
   const [showDeliveryFee, setShowDeliveryFee] = useState(false);
 
-  // 🆕 Prevent modal from re‑opening after manual close
+  // 🆕 Novos estados para divisão de conta
+  const [showSplitBill, setShowSplitBill] = useState(false);
+  const [showSplitPayment, setShowSplitPayment] = useState(false);
+
+  // Prevent modal from re‑opening after manual close
   const dismissedIdsRef = useRef(new Set());
 
   useEffect(() => {
@@ -40,7 +46,7 @@ const Orders = () => {
     (order) => !["Completed", "Cancelled"].includes(order.orderStatus)
   );
 
-  // ✅ Auto-open DeliveryFeeModal only for un‑dismissed orders
+  // Auto-open DeliveryFeeModal only for un‑dismissed orders
   useEffect(() => {
     if (showDeliveryFee) return;
     const pending = activeOrders.find(
@@ -73,19 +79,28 @@ const Orders = () => {
   };
 
   const handleShowDeliveryFee = (order) => {
-    // Remove from dismissed set if manually opened
     dismissedIdsRef.current.delete(order._id);
     setSelectedOrder(order);
     setShowDeliveryFee(true);
   };
 
-  // 🆕 Close handler that remembers we dismissed this order
   const closeDeliveryFee = () => {
     if (selectedOrder) {
       dismissedIdsRef.current.add(selectedOrder._id);
     }
     setShowDeliveryFee(false);
     setSelectedOrder(null);
+  };
+
+  // 🆕 Handlers para divisão de conta
+  const handleSplitBill = (order) => {
+    setSelectedOrder(order);
+    setShowSplitBill(true);
+  };
+
+  const handleSplitPayment = (order) => {
+    setSelectedOrder(order);
+    setShowSplitPayment(true);
   };
 
   return (
@@ -125,6 +140,8 @@ const Orders = () => {
                 onShowPayment={handleShowPayment}
                 onShowInvoice={handleShowInvoice}
                 onShowDeliveryFee={handleShowDeliveryFee}
+                onSplitBill={handleSplitBill}           // 🆕
+                onSplitPayment={handleSplitPayment}     // 🆕
               />
             ))
           ) : (
@@ -133,7 +150,7 @@ const Orders = () => {
         </div>
       </div>
 
-      {/* Modais */}
+      {/* Modais existentes */}
       {showPayment && selectedOrder && (
         <PaymentModal order={selectedOrder} onClose={() => setShowPayment(false)} />
       )}
@@ -141,10 +158,15 @@ const Orders = () => {
         <Invoice orderInfo={selectedOrder} setShowInvoice={setShowInvoice} />
       )}
       {showDeliveryFee && selectedOrder && (
-        <DeliveryFeeModal
-          order={selectedOrder}
-          onClose={closeDeliveryFee}   // 🆕 uses the dismissal‑aware close handler
-        />
+        <DeliveryFeeModal order={selectedOrder} onClose={closeDeliveryFee} />
+      )}
+
+      {/* 🆕 Novos modais para divisão de conta */}
+      {showSplitBill && selectedOrder && (
+        <SplitBillModal order={selectedOrder} onClose={() => setShowSplitBill(false)} />
+      )}
+      {showSplitPayment && selectedOrder && (
+        <SplitPaymentModal order={selectedOrder} onClose={() => setShowSplitPayment(false)} />
       )}
 
       <BottomNav />
