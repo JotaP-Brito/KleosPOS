@@ -122,6 +122,62 @@ const addOrder = async (req, res, next) => {
   }
 };
 
+const saveOrderSplits = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { splits } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return next(createHttpError(400, "ID inválido"));
+    }
+
+    const order = await Order.findById(id);
+    if (!order) return next(createHttpError(404, "Pedido não encontrado"));
+
+    order.splits = splits;
+
+    // Se todas as partes já estiverem pagas, marca o pedido como Paid
+    const allPaid = splits.every(s => s.paymentStatus === "Paid");
+    order.paymentStatus = allPaid ? "Paid" : "PartiallyPaid";
+
+    await order.save();
+    res.status(200).json({ success: true, data: order });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const payOrderSplit = async (req, res, next) => {
+  try {
+    const { id, splitId } = req.params;
+    const { paymentMethod } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return next(createHttpError(400, "ID do pedido inválido"));
+    }
+
+    const order = await Order.findById(id);
+    if (!order) return next(createHttpError(404, "Pedido não encontrado"));
+
+    const split = order.splits.id(splitId);
+    if (!split) return next(createHttpError(404, "Parte não encontrada"));
+
+    split.paymentStatus = "Paid";
+
+    // Se todas as partes foram pagas, pedido = Paid
+    const allPaid = order.splits.every(s => s.paymentStatus === "Paid");
+    order.paymentStatus = allPaid ? "Paid" : "PartiallyPaid";
+
+    // Opcional: guardar o método de pagamento usado nesta parte
+    // (pode estender o objeto split se quiser)
+    await order.save();
+
+    res.status(200).json({ success: true, data: order });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getOrderById = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -226,4 +282,6 @@ module.exports = {
   getOrders,
   updateOrder,
   updateOrderPayment,
+  saveOrderSplits,
+  payOrderSplit,
 };
