@@ -17,7 +17,7 @@ export const getBgColor = () => {
 };
 
 export const getAvatarName = (name) => {
-  if(!name) return "";
+  if (!name) return "";
 
   return name.split(" ").map(word => word[0]).join("").toUpperCase();
 
@@ -30,6 +30,12 @@ export const formatDate = (date) => {
   ];
   return `${months[date.getMonth()]} ${String(date.getDate()).padStart(2, '0')}, ${date.getFullYear()}`;
 };
+
+export const saveOrderSplits = (orderId, splits) =>
+  axiosWrapper.put(`/order/${orderId}/splits`, { splits });
+
+export const paySplit = (orderId, splitId, paymentMethod) =>
+  axiosWrapper.put(`/order/${orderId}/splits/${splitId}/pay`, { paymentMethod });
 
 export const formatDateAndTime = (date) => {
   const dateAndTime = new Date(date).toLocaleString("en-US", {
