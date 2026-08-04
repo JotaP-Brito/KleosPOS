@@ -1,32 +1,6 @@
 const mongoose = require("mongoose");
 
 const orderSchema = new mongoose.Schema({
-    paymentStatus: {
-    type: String,
-    enum: ["Pending", "PendingDeliveryFee", "PartiallyPaid", "Paid"],
-    default: "Pending",
-  },
-
-  splits: [
-    {
-      name: { type: String, required: true },
-      amount: { type: Number, required: true },
-      items: [
-        {
-          name: String,
-          price: Number,
-          quantity: Number,
-          additions: [],
-          observation: String,
-        },
-      ],
-      paymentStatus: {
-        type: String,
-        enum: ["Pending", "Paid"],
-        default: "Pending",
-      },
-    },
-  ],
     customerDetails: {
         name: { type: String, required: true },
         phone: { type: String, required: true },
@@ -42,12 +16,10 @@ const orderSchema = new mongoose.Schema({
         type: String,
         default: "",
     },
-    // ✅ Delivery fee set by employee in POS
     deliveryFee: {
         type: Number,
         default: 0,
     },
-    // ✅ NEW: troco information
     changeNeeded: {
         type: Boolean,
         default: false,
@@ -85,7 +57,7 @@ const orderSchema = new mongoose.Schema({
     },
     paymentStatus: {
         type: String,
-        enum: ["Pending", "PendingDeliveryFee", "Paid"],
+        enum: ["Pending", "PendingDeliveryFee", "PartiallyPaid", "Paid"],
         default: "Pending",
     },
     paymentMethod: String,
@@ -96,6 +68,11 @@ const orderSchema = new mongoose.Schema({
     paymentData: {
         razorpay_order_id: String,
         razorpay_payment_id: String,
+    },
+    // 🆕 Itens já cobrados (índices)
+    paidItems: {
+        type: [Number],
+        default: [],
     },
 }, { timestamps: true });
 
