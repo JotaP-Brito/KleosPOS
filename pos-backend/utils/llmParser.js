@@ -1,129 +1,78 @@
 const axios = require("axios");
+const { levenshtein } = require("./stringUtils");
 
-const OLLAMA_URL = "http://localhost:11434/api/chat";
-const MODEL = "phi3:mini";
+const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
+const MODEL = process.env.LLM_MODEL || "qwen2.5:1.5b-instruct-q4_K_M";
 
-// Helper: normalize possible key spelling mistakes
-function normalizeKeys(obj) {
-  if (typeof obj !== "object" || obj === null) return obj;
-  if (Array.isArray(obj)) return obj.map(normalizeKeys);
-  const newObj = {};
-  for (const key of Object.keys(obj)) {
-    const fixedKey = key
-      .replace("nameharmony", "name")
-      .replace("quantidade", "quantity");
-    newObj[fixedKey] = normalizeKeys(obj[key]);   // always use fixedKey
-  }
-  return newObj;
+function buildSystemPrompt(products, additions) {
+  const productList = products.map((p) => `- ${p.name}`).join("\n");
+  const additionList = additions.map((a) => `- ${a.name}`).join("\n");
+  return `Você extrai pedidos de hambúrguer de mensagens em português informal.
+Cardápio disponível:
+${productList}
+
+Adicionais disponíveis:
+${additionList}
+
+Responda APENAS com JSON válido, sem texto extra, neste formato:
+{"items":[{"name":"<nome exato do cardápio>","quantity":1,"observation":"","additions":["<nome exato do adicional>"]}]}
+Se não conseguir identificar nenhum item do cardápio, responda {"items":[]}`;
 }
 
-// Simple fallback parser (used if LLM fails completely)
-function simpleParseOrder(messageText, menuItems) {
-  const msg = messageText.toLowerCase();
-  const items = [];
-  for (const product of menuItems) {
-    if (msg.includes(product.name.toLowerCase())) {
-      const regex = new RegExp(`(\\d+)\\s*${product.name.toLowerCase()}`);
-      const match = msg.match(regex);
-      const quantity = match ? parseInt(match[1]) : 1;
-      items.push({ name: product.name, quantity, observation: "", additions: [] });
-    }
-  }
-  if (items.length > 0) {
-    return { order: true, items };
-  }
-  return null;
-}
+async function parseWhatsAppOrderWithLLM(rawMessage, products, additions) {
+  const systemPrompt = buildSystemPrompt(products, additions);
 
-// Main LLM-based item extraction (fallback only)
-async function parseWhatsAppOrderWithLLM(messageText, menuItems, additions) {
-  // Build dynamic menu and additions strings
-  const menuList = menuItems
-    .map(i => `${i.name} (R$${i.price.toFixed(2)})`)
-    .join(" | ");
-  const additionsList = additions
-    .map(a => `${a.name} (${a.type === "extra" ? `R$${a.price.toFixed(2)}` : "grátis"})`)
-    .join(" | ");
-
-  // Strict prompt: only orders, no chat, no extra fields
-  const systemPrompt = `You are a JSON order extractor for a restaurant.
-
-RULES:
-- If the message contains a food order, output: {"order":true,"items":[{"name":"exact product name","quantity":1}]}
-- If the message does NOT contain a food order (greeting, question, etc.), output: {"order":false}
-- NEVER output a "reply" field, NEVER chat.
-- Use exact product names from the menu provided.
-- Quantities default to 1 if not specified.
-- Do NOT add delivery, address, payment, or observation fields.
-- Respond ONLY with a raw JSON object – no markdown, no explanation.`;
-
-  const messages = [
-    { role: "system", content: systemPrompt },
+  const { data } = await axios.post(
+    `${OLLAMA_URL}/api/chat`,
     {
-      role: "user",
-      content: `Menu: ${menuList}\nAvailable additions (for context only): ${additionsList}\n\nAnalyze this message: "${messageText}"`
-    }
-  ];
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2000);   // 2-second timeout
-
-  try {
-    const response = await axios.post(
-      OLLAMA_URL,
-      {
-        model: MODEL,
-        messages,
-        stream: false,
-        options: { temperature: 0.0, num_predict: 150 }
+      model: MODEL,
+      stream: false,
+      format: "json",
+      keep_alive: "30m",
+      options: {
+        num_ctx: 1024,
+        num_predict: 256,
+        num_thread: 4,
+        temperature: 0.1,
       },
-      { signal: controller.signal }
-    );
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: rawMessage },
+      ],
+    },
+    { timeout: 15000 }
+  );
 
-    clearTimeout(timeout);
-
-    let text = response.data.message.content.trim();
-    console.log("LLM raw output:", text);
-
-    // Remove possible markdown fences
-    text = text.replace(/```json|```/gi, "").trim();
-
-    // Extract JSON: find first { and last }
-    const firstBrace = text.indexOf("{");
-    const lastBrace = text.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      text = text.substring(firstBrace, lastBrace + 1);
-    }
-
-    // Try to parse
-    try {
-      return normalizeKeys(JSON.parse(text));
-    } catch (firstError) {
-      console.log("First JSON parse failed, attempting repairs...");
-      const match = text.match(/\{[\s\S]*\}/);
-      if (match) {
-        let jsonText = match[0]
-          .replace(/,(\s*[}\]])/g, "$1")   // trailing commas
-          .replace(/,\s*,/g, ",");         // double commas
-        try {
-          return normalizeKeys(JSON.parse(jsonText));
-        } catch (secondError) {
-          console.error("JSON repair failed:", secondError.message);
-        }
-      }
-    }
-  } catch (error) {
-    clearTimeout(timeout);
-    console.error("LLM HTTP error:", error.message);
+  let parsed;
+  try {
+    parsed = JSON.parse(data.message.content);
+  } catch {
+    return null;
   }
 
-  // If everything fails, fallback to simple parser
-  console.log("LLM failed, trying simple keyword parser...");
-  const fallback = simpleParseOrder(messageText, menuItems);
-  if (fallback) return fallback;
+  if (!parsed.items || parsed.items.length === 0) return null;
 
-  // Absolute last resort – not an order
-  return { order: false };
+  const validatedItems = [];
+  for (const item of parsed.items) {
+    const match =
+      products.find((p) => p.name.toLowerCase() === (item.name || "").toLowerCase()) ||
+      products.find((p) => levenshtein(p.name.toLowerCase(), (item.name || "").toLowerCase()) <= 2);
+    if (!match) continue;
+
+    validatedItems.push({
+      name: match.name,
+      price: match.price,
+      quantity: item.quantity > 0 ? item.quantity : 1,
+      observation: item.observation || "",
+      additions: (item.additions || [])
+        .map((addName) => additions.find((a) => a.name.toLowerCase() === addName.toLowerCase()))
+        .filter(Boolean)
+        .map((a) => ({ name: a.name, price: a.price })),
+    });
+  }
+
+  if (validatedItems.length === 0) return null;
+  return { order: true, items: validatedItems, byKeyword: false };
 }
 
 module.exports = { parseWhatsAppOrderWithLLM };
