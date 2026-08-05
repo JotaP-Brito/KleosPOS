@@ -333,16 +333,19 @@ const stepHandlers = {
   },
 
   // ── RECEBER_ITENS ─────────────────────────────────────────────────────────
+  // ── RECEBER_ITENS ─────────────────────────────────────────────────────────
   async RECEBER_ITENS(ctx) {
     const { phone, from, rawMessage, sessionId, session } = ctx;
     const { products, additions } = await getMenuData();
 
     let parsed = null;
+    let usedLLM = false;
 
     if (!session.skipParsing) {
-      // 🆕 Split on " e um / e uma" ONLY (avoid splitting addition phrases)
       const segments = splitOnEUm(rawMessage);
       let allItems = [];
+      let allLeftovers = [];
+
       for (const seg of segments) {
         const segMsg = seg.trim();
         if (!segMsg) continue;
@@ -350,15 +353,54 @@ const stepHandlers = {
         const parsedSeg = parseOrderByKeywords(segNormalized, products, additions);
         if (parsedSeg && parsedSeg.items.length > 0) {
           allItems = allItems.concat(parsedSeg.items);
+          allLeftovers = allLeftovers.concat(parsedSeg.leftoverWords || []);
         }
       }
 
-      if (allItems.length > 0) {
+      if (allItems.length > 0 && allLeftovers.length === 0) {
+        // Clean match — keyword parser explained the whole message. Fast path.
         parsed = { order: true, items: allItems, byKeyword: true };
+      } else if (allItems.length > 0 && allLeftovers.length > 0) {
+        // Partial match — trust it provisionally but reconcile with the LLM,
+        // since some content in the message wasn't accounted for.
+        console.log(`⚠️ Match parcial para "${rawMessage}" — palavras não reconhecidas:`, allLeftovers);
+        let llmResult = null;
+        try {
+          const llmTimeout = setTimeout(() => {
+            sendWhatsAppReply(from, "Só um instante, estou conferindo seu pedido... 🍔", sessionId);
+          }, 2000);
+          llmResult = await parseWhatsAppOrderWithLLM(rawMessage, products, additions);
+          clearTimeout(llmTimeout);
+        } catch (err) {
+          console.error("Erro na LLM (reconciliação):", err.message);
+        }
+
+        if (llmResult && llmResult.items.length > allItems.length) {
+          usedLLM = true;
+          const merged = mergeParsedResults(allItems, llmResult.items);
+          parsed = { order: true, items: merged, byKeyword: false };
+          console.log(`✅ LLM encontrou itens adicionais. Itens finais:`, merged.map((i) => i.name));
+        } else {
+          // LLM didn't find more than the keyword parser — go with what we have,
+          // but keep the leftover warning for the confirmation step.
+          parsed = { order: true, items: allItems, byKeyword: true, hadLeftover: true };
+        }
       } else {
-        // ── LLM fallback – NOT IN USE, kept for future ──
-        // console.log("Keyword parser found nothing, trying LLM…");
-        // try { parsed = await parseWhatsAppOrderWithLLM(rawMessage, products, additions); } catch (_) { parsed = null; }
+        // Nothing matched at all — full LLM fallback.
+        console.log(`❌ Nenhum match por keyword para "${rawMessage}", tentando LLM…`);
+        try {
+          const llmTimeout = setTimeout(() => {
+            sendWhatsAppReply(from, "Só um instante, estou conferindo seu pedido... 🍔", sessionId);
+          }, 2000);
+          const llmResult = await parseWhatsAppOrderWithLLM(rawMessage, products, additions);
+          clearTimeout(llmTimeout);
+          if (llmResult) {
+            usedLLM = true;
+            parsed = llmResult;
+          }
+        } catch (err) {
+          console.error("Erro na LLM (fallback total):", err.message);
+        }
       }
     } else {
       parsed = { order: true, items: session.items || [] };
