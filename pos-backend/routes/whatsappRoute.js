@@ -6,6 +6,7 @@ const axios = require("axios");
 const Order = require("../models/orderModel");
 const { parseWhatsAppOrderWithLLM } = require("../utils/llmParser");   // kept for future use
 const { parseOrderByKeywords } = require("../utils/keywordParser");
+const { mergeParsedResults } = require("../utils/orderMerge");
 const {
   getSession,
   updateSession,
