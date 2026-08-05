@@ -633,6 +633,9 @@ const stepHandlers = {
     if (hasType && hasPayment && hasAddr) {
       updateSession(phone, { step: "CONFIRMAR" });
       const { total, tipo, itens } = buildOrderSummary(getSession(phone));
+      const warning = parsed?.hadLeftover
+    ? "\n\n⚠️ Notei algo na sua mensagem que não reconheci — confira se está tudo certo."
+    : "";
       await sendWhatsAppReply(from, `📝 Resumo do pedido:\n\n${itens}\n\n🏷️ ${tipo}\n💳 ${sess.payment}\n💰 Total: R$ ${total.toFixed(2)}\n\nConfirma? (sim / não)`, sessionId);
       return true;
     }
