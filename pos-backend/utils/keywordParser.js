@@ -25,7 +25,7 @@ const ADDITION_ALIAS_MAP = {
   // Queijos
   "cheddar":        { name: "Cheddar",            price: 4.00 },
   "catupiry":       { name: "Catupiry",           price: 4.00 },
-  "requeijao":      { name: "Catupiry",           price: 4.00 }, // customers often say "requeijão"
+  "requeijao":      { name: "Catupiry",           price: 4.00 },
   "mussarela":      { name: "Mussarela",          price: 2.00 },
   "mussa":          { name: "Mussarela",          price: 2.00 },
   "muzarela":       { name: "Mussarela",          price: 2.00 },
@@ -57,10 +57,9 @@ const OBSERVATION_ALIAS_MAP = {
   "pimenta":    "Sem Pimenta",
   "molho":      "Sem Molho",
   "cebolinha":  "Sem Cebolinha",
-  "cheiroverde": "Sem Cheiro Verde",   // "cheiro verde" pre-normalised to single token
+  "cheiroverde": "Sem Cheiro Verde",
   "salsinha":   "Sem Salsinha",
   "coentro":    "Sem Coentro",
-  "pimenta":    "Sem Pimenta",
   "bacon":      "Sem Bacon",
   "ovo":        "Sem Ovo",
   "presunto":   "Sem Presunto",
@@ -93,7 +92,7 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
 
   // Number words — only used for quantities, never for addition/observation matching
   const quantityWords = new Set([
-    "um", "uma", "dois", "duas", "tres", "tres", "quatro", "cinco", "seis",
+    "um", "uma", "dois", "duas", "tres", "quatro", "cinco", "seis",
     "sete", "oito", "nove", "dez", "onze", "doze", "treze", "catorze", "quinze",
   ]);
   const quantityMap = {
@@ -131,8 +130,6 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
   }
 
   // ── Pre-scan: mark "sem X [Y]" and "com/mais/extra X [Y]" spans as reserved ──
-  // These are reserved only to prevent product matching — they are NOT skipped
-  // during the additions/observations pass below.
   const ADD_TRIGGERS  = new Set(["com", "mais", "acrescimo", "extra", "adicional", "e", "tambem"]);
   const SKIP_FILLERS  = new Set(["de", "do", "da", "um", "uma", "o", "a", "acrescimo", "extra"]);
 
@@ -167,12 +164,10 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
         const isAddWord = additionSurfaceWords.has(words[j]);
         const isProdWord = productWordSet.has(words[j]);
         if (isAddWord) {
-          // It's an addition word — reserve it so it can't be mis-matched as a product
           usedIndices.add(i);
           usedIndices.add(j);
           reserved++;
         } else if (isProdWord && !isAddWord) {
-          // Pure product word (e.g. "macarrao") — this is a new item, not an addition; stop
           break;
         } else {
           break;
@@ -183,8 +178,6 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
   }
 
   // Sort products: by longest alias word count first, then by name length.
-  // This ensures "Coca Lata Zero" (4-word alias "coca cola lata zero") is tried
-  // before "Coca Cola Lata" (3-word alias "coca cola lata") at the same position.
   const sortedProducts = [...menuItems].sort((a, b) => {
     const aMaxWords = Math.max(...(productAliases.get(a) || [""]).map(al => al.split(" ").length));
     const bMaxWords = Math.max(...(productAliases.get(b) || [""]).map(al => al.split(" ").length));
@@ -193,7 +186,6 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
   });
 
   // ── Pass 1: multi-word phrase matching ──
-  // Within each product, try aliases sorted by word count desc (longest first).
   for (const product of sortedProducts) {
     const aliases = (productAliases.get(product) || [])
       .slice()
@@ -253,10 +245,7 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
 
   if (foundItems.length === 0) return null;
 
-  // ─────────────────────────────────────────────────────────────────────────
   // Helper: find the item that "owns" a modifier at position modPos.
-  // Ownership = the item whose last token index is closest to (and before) modPos.
-  // ─────────────────────────────────────────────────────────────────────────
   function closestItemBefore(modPos) {
     let best = null, bestDist = Infinity;
     for (const item of foundItems) {
@@ -266,8 +255,6 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
         if (dist < bestDist) { bestDist = dist; best = item; }
       }
     }
-    // Fallback: if nothing is strictly before (e.g. modifier appears before first item),
-    // assign to the item with the smallest index gap overall.
     if (!best && foundItems.length > 0) {
       for (const item of foundItems) {
         const firstIdx = Math.min(...item.indices);
@@ -283,15 +270,12 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
     if (words[i] !== "sem") continue;
     if (i + 1 >= words.length) continue;
 
-    // Collect all contiguous observation words after "sem"
     const obsParts = [];
     let j = i + 1;
     while (j < words.length && !ADD_TRIGGERS.has(words[j]) && words[j] !== "sem") {
-      // Stop at a clearly unrelated word (number or another product)
       if (/^\d+$/.test(words[j]) || quantityWords.has(words[j])) break;
       obsParts.push(words[j]);
       j++;
-      // Only multi-word obs if explicitly in alias map; otherwise stop at 1
       if (obsParts.length === 1 && !OBSERVATION_ALIAS_MAP[obsParts.join(" ")]) break;
     }
     if (obsParts.length === 0) continue;
@@ -308,28 +292,14 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
     } else if (!owner.observation.includes(obsLabel)) {
       owner.observation += `, ${obsLabel}`;
     }
-    // Mark sem + words as used so they don't confuse addition matching
     usedIndices.add(i);
     for (let k = i + 1; k < i + 1 + obsParts.length; k++) usedIndices.add(k);
   }
 
   // ── Pass 4: additions ─────────────────────────────────────────────────────
-  //
-  // Strategy: scan the text for addition triggers ("com", "mais", etc.) and
-  // then resolve what follows against ADDITION_ALIAS_MAP (exact > fuzzy).
-  // This is far more reliable than the old per-addition Levenshtein loop.
-  //
-  // We handle two sub-cases:
-  //   A) Trigger-based: "com catupiry", "com acréscimo de bacon", "mais um ovo"
-  //   B) Inline (no trigger): a bare addition word sitting right after the item
-  //      and not already captured — e.g. "X-Egg Bacon" where "bacon" is an addition
-  // ─────────────────────────────────────────────────────────────────────────
-
-  // Build a sorted list of alias keys by length desc so multi-word keys match first
   const sortedAliasKeys = Object.keys(ADDITION_ALIAS_MAP).sort((a, b) => b.length - a.length);
 
   function resolveAdditionAt(startIdx) {
-    // Try to match the longest alias key starting at startIdx
     for (const key of sortedAliasKeys) {
       const keyWords = key.split(" ");
       if (startIdx + keyWords.length > words.length) continue;
@@ -338,14 +308,13 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
         return { match: ADDITION_ALIAS_MAP[key], consumedCount: keyWords.length };
       }
     }
-    // Fuzzy single-token fallback (Levenshtein ≤ 1 for short words, ≤ 2 for longer)
     const token = words[startIdx];
     if (!token || token.length < 3 || stopWords.has(token) || quantityWords.has(token) || /^\d+$/.test(token)) {
       return null;
     }
     let bestKey = null, bestDist = Infinity;
     for (const key of sortedAliasKeys) {
-      if (key.includes(" ")) continue; // single-token fuzzy only
+      if (key.includes(" ")) continue;
       const maxDist = key.length <= 5 ? 1 : 2;
       const d = levenshtein(token, key);
       if (d <= maxDist && d < bestDist) { bestDist = d; bestKey = key; }
@@ -358,18 +327,12 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
   for (let i = 0; i < words.length; i++) {
     if (!ADD_TRIGGERS.has(words[i])) continue;
 
-    // Skip the trigger itself and any fillers
     let j = i + 1;
     while (j < words.length && SKIP_FILLERS.has(words[j])) j++;
 
-    // Parse one or more additions chained after this trigger
-    // e.g. "com bacon e cheddar" → two additions
     while (j < words.length) {
-      // Skip a bare quantity digit that precedes the addition name ("com 1 ovo" → skip "1")
       if (/^\d+$/.test(words[j])) { j++; continue; }
-      // Stop at a new trigger, "sem", a number, or another product
       if (ADD_TRIGGERS.has(words[j]) || words[j] === "sem" || /^\d+$/.test(words[j])) break;
-      // Stop at a quantity word that isn't being used as an addition
       if (quantityWords.has(words[j]) && !ADDITION_ALIAS_MAP[words[j]]) break;
 
       const result = resolveAdditionAt(j);
@@ -381,27 +344,22 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
       const owner = closestItemBefore(j) || foundItems[foundItems.length - 1];
       if (owner) {
         const add = result.match;
-        // Deduplicate
         if (!owner.additions.some(a => a.name === add.name)) {
           owner.additions.push({ name: add.name, price: add.price });
         }
-        // Mark consumed words as used
         usedIndices.add(i); // trigger
         for (let k = j; k < j + result.consumedCount; k++) usedIndices.add(k);
       }
       j += result.consumedCount;
 
-      // Allow chaining: "e" or "mais" between additions
       if (j < words.length && (words[j] === "e" || words[j] === "mais")) j++;
     }
   }
 
-  // Sub-case B: bare inline additions (no trigger) — word right after item name
-  // Only match exact keys (no fuzzy) to avoid false positives
+  // Sub-case B: bare inline additions (no trigger)
   for (const item of foundItems) {
     const lastItemIdx = Math.max(...item.indices);
     let j = lastItemIdx + 1;
-    // Skip filler words right after item
     while (j < words.length && SKIP_FILLERS.has(words[j])) j++;
 
     while (j < words.length) {
@@ -410,7 +368,7 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
       if (/^\d+$/.test(words[j]) || quantityWords.has(words[j])) break;
 
       const result = resolveAdditionAt(j);
-      if (!result) break; // no match → stop scanning inline for this item
+      if (!result) break;
 
       const add = result.match;
       if (!item.additions.some(a => a.name === add.name)) {
@@ -422,9 +380,28 @@ function parseOrderByKeywords(messageText, menuItems, additions) {
     }
   }
 
-  // ── Cleanup: strip internal tracking field ──
+  // ── Cleanup: strip internal tracking field, compute leftover words ────────
+  const stopWordsForLeftover = new Set([
+    "lata", "litro", "litros", "ml", "l", "un", "unid", "unidade", "unidades",
+    "x", "de", "com", "sem", "para", "quero", "pedido", "pedir", "vou",
+    "vamos", "ai", "no", "na", "faz", "fazer", "e", "o", "a", "do", "da",
+  ]);
+  const quantityWordsForLeftover = new Set([
+    "um", "uma", "dois", "duas", "tres", "quatro", "cinco", "seis",
+    "sete", "oito", "nove", "dez", "onze", "doze", "treze", "catorze", "quinze",
+  ]);
+
+  const leftoverWords = words.filter((w, i) =>
+    !usedIndices.has(i) &&
+    w.length >= 3 &&
+    !stopWordsForLeftover.has(w) &&
+    !quantityWordsForLeftover.has(w) &&
+    !ADD_TRIGGERS.has(w) &&
+    !/^\d+$/.test(w)
+  );
+
   const cleanedItems = foundItems.map(({ indices, ...item }) => item);
-  return { order: true, items: cleanedItems };
+  return { order: true, items: cleanedItems, leftoverWords };
 }
 
 module.exports = { parseOrderByKeywords, ADDITION_ALIAS_MAP };
