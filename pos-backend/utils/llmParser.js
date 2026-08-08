@@ -5,18 +5,12 @@ const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const MODEL = process.env.LLM_MODEL || "qwen2.5:1.5b-instruct-q4_K_M";
 
 function buildSystemPrompt(products, additions) {
-  const productList = products.map((p) => `- ${p.name}`).join("\n");
-  const additionList = additions.map((a) => `- ${a.name}`).join("\n");
-  return `Você extrai pedidos de hambúrguer de mensagens em português informal.
-Cardápio disponível:
-${productList}
-
-Adicionais disponíveis:
-${additionList}
-
-Responda APENAS com JSON válido, sem texto extra, neste formato:
-{"items":[{"name":"<nome exato do cardápio>","quantity":1,"observation":"","additions":["<nome exato do adicional>"]}]}
-Se não conseguir identificar nenhum item do cardápio, responda {"items":[]}`;
+  const productList = products.map((p) => p.name).join(", ");
+  const additionList = additions.map((a) => a.name).join(", ");
+  return `Você extrai pedidos de hambúrguer. Cardápio: ${productList}. Adicionais: ${additionList}.
+Responda APENAS com JSON compacto em uma linha, sem espaços ou quebras de linha, neste formato exato:
+{"items":[{"name":"X","quantity":1,"observation":"","additions":["Y"]}]}
+Se nada do cardápio for identificado: {"items":[]}`;
 }
 
 async function parseWhatsAppOrderWithLLM(rawMessage, products, additions) {
