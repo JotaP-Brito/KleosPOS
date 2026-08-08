@@ -2,7 +2,7 @@ const cron = require("node-cron");
 const Customer = require("../models/Customer");
 const sendWhatsAppMessage = require("./sendWhatsAppMessage");
 
-const INACTIVE_DAYS = 7; // change as needed
+const INACTIVE_DAYS = 0; // change as needed
 const PROMO_MSG = "🍔 Saudades! Ganhe 10% de desconto no seu próximo pedido com o cupom VOLTE10. Faça já o seu pedido!";
 
 async function sendInactivePromos() {
