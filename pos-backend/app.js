@@ -61,6 +61,7 @@ app.use("/api/addition", require("./routes/additionRoute"));
 app.use("/api/whatsapp", require("./routes/whatsappRoute"));
 app.use("/api/order", require("./routes/deliveryFeeRoute"));
 app.use("/api/bot-status", require("./routes/botStatusRoute"));
+app.use("/api/customer", require("./routes/customerRoute"));
 
 // Serve static files from pos-backend/public (menu image, etc.)
 app.use(express.static(path.join(__dirname, "public")));

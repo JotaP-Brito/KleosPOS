@@ -11,8 +11,8 @@ const {
   getSession,
   updateSession,
   clearSession,
-  muteSession,      // 🆕
-  unmuteSession,    // 🆕
+  muteSession,
+  unmuteSession,
 } = require("../utils/sessionManager");
 const { getMenuData } = require("../utils/menuCache");
 const { normalizeOrderText } = require("../utils/orderNormalizer");
@@ -334,7 +334,6 @@ const stepHandlers = {
   },
 
   // ── RECEBER_ITENS ─────────────────────────────────────────────────────────
-  // ── RECEBER_ITENS ─────────────────────────────────────────────────────────
   async RECEBER_ITENS(ctx) {
     const { phone, from, rawMessage, sessionId, session } = ctx;
     const { products, additions } = await getMenuData();
@@ -407,6 +406,8 @@ const stepHandlers = {
       parsed = { order: true, items: session.items || [] };
       updateSession(phone, { skipParsing: false });
     }
+
+    // ... (the rest of RECEBER_ITENS continues exactly as before, down to the end of the handler)
 
     if (!parsed || parsed.order === false || !parsed.items || parsed.items.length === 0) {
       const lowerMsg = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -637,7 +638,7 @@ const stepHandlers = {
       const warning = parsed?.hadLeftover
     ? "\n\n⚠️ Notei algo na sua mensagem que não reconheci — confira se está tudo certo."
     : "";
-      await sendWhatsAppReply(from, `📝 Resumo do pedido:\n\n${itens}\n\n🏷️ ${tipo}\n💳 ${sess.payment}\n💰 Total: R$ ${total.toFixed(2)}\n\nConfirma? (sim / não)`, sessionId);
+      await sendWhatsAppReply(from, `📝 Resumo do pedido:\n\n${itens}\n\n🏷️ ${tipo}\n💳 ${sess.payment}\n💰 Total: R$ ${total.toFixed(2)}${warning}\n\nConfirma? (sim / não)`, sessionId);
       return true;
     }
 
@@ -735,6 +736,10 @@ const stepHandlers = {
           paymentStatus: "PendingDeliveryFee",
         });
         await newOrder.save();
+        // 🆕 Update customer record
+        const orderTotal = newOrder.bills?.totalWithTax || 0;
+        await updateCustomerRecord(phone, ctx.contact?.name || "Cliente WhatsApp", from, orderTotal);
+
         console.log(`🛵 Delivery order ${newOrder._id} saved – waiting for employee to set fee`);
         updateSession(phone, { step: "CONFIRMAR", pendingOrderId: String(newOrder._id) });
         await sendWhatsAppReply(
@@ -788,6 +793,10 @@ const stepHandlers = {
           changeFor: 0,
         });
         await newOrder.save();
+        // 🆕 Update customer record
+        const orderTotal = newOrder.bills?.totalWithTax || 0;
+        await updateCustomerRecord(phone, ctx.contact?.name || "Cliente WhatsApp", from, orderTotal);
+
         updateSession(phone, { step: "CONFIRMAR", pendingOrderId: String(newOrder._id) });
         await sendWhatsAppReply(from, `✅ Pedido recebido sem troco!\n\n${itens}\n\n🏠 Entrega em: ${sess.address}\n💳 Dinheiro\n\n⏳ Taxa de entrega será confirmada em breve.`, sessionId);
       } catch (err) {
@@ -828,6 +837,10 @@ const stepHandlers = {
           changeFor: num,
         });
         await newOrder.save();
+        // 🆕 Update customer record
+        const orderTotal = newOrder.bills?.totalWithTax || 0;
+        await updateCustomerRecord(phone, ctx.contact?.name || "Cliente WhatsApp", from, orderTotal);
+
         updateSession(phone, { step: "CONFIRMAR", pendingOrderId: String(newOrder._id) });
         await sendWhatsAppReply(from, `✅ Pedido recebido! Troco para R$ ${num.toFixed(2)}\n\n${itens}\n\n🏠 Entrega em: ${sess.address}\n💳 Dinheiro\n\n⏳ Taxa de entrega será confirmada em breve.`, sessionId);
       } catch (err) {
@@ -1035,8 +1048,6 @@ const stepHandlers = {
       }
 
       // Normal path (Takeaway / Dine-in): create order from session
-      // Guard: if somehow we're in a Delivery session without a pendingOrderId,
-      // something went wrong in the flow — don't create a second order.
       if (sess.orderType === "Delivery" && !sess.pendingOrderId) {
         console.error(`⚠️  CONFIRMAR reached for Delivery session without pendingOrderId – phone: ${phone}`);
         await sendWhatsAppReply(from, "Houve um problema ao localizar o seu pedido. Por favor, tente novamente.", sessionId);
@@ -1059,6 +1070,9 @@ const stepHandlers = {
           paymentStatus: "Pending",
         });
         await newOrder.save();
+        // 🆕 Update customer record
+        const orderTotal = newOrder.bills?.totalWithTax || 0;
+        await updateCustomerRecord(phone, contact?.name || "Cliente WhatsApp", from, orderTotal);
 
         let confirmMsg = `✅ Pedido #${String(newOrder._id).slice(-6)} confirmado! Já estamos preparando. Obrigado pela preferência! 🍔`;
         confirmMsg += etaMessage(newOrder.orderType);
@@ -1076,7 +1090,6 @@ const stepHandlers = {
 
     } else if (cl?.confirmado === false) {
       // ── Handoff to human ──
-      // Call the handoff directly (don't rely on state machine fallthrough)
       await sendWhatsAppReply(from, "Certo! Um atendente vai conversar com você, aguarde um instante. 👩‍🍳", sessionId);
       muteSession(phone);
       return true;
@@ -1119,6 +1132,18 @@ router.post("/webhook", async (req, res) => {
       clearSession(phone);
       await sendWhatsAppReply(from, "Pedido cancelado. Se precisar de algo mais, é só pedir! 🙂", sessionId);
       return res.json({ status: "cancelled" });
+    }
+
+    // ---- Opt-out from promotions ----
+    if (lowerMsg === "sair" || lowerMsg === "pare" || lowerMsg === "nao quero promocao") {
+      try {
+        const Customer = require("../models/Customer");
+        await Customer.findOneAndUpdate({ phone }, { optedOut: true }, { upsert: true });
+        await sendWhatsAppReply(from, "Você não receberá mais nossas promoções. 😢", sessionId);
+      } catch (err) {
+        console.error("Opt-out error:", err.message);
+      }
+      return res.json({ status: "opted_out" });
     }
 
     // ---- Get current session (the ONLY declaration) ----
