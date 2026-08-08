@@ -32,6 +32,7 @@ const {
   getDrinkOptions,
   needsDrinkDisambiguation,
 } = require("../utils/whatsappHelpers");
+const { updateCustomerRecord } = require("../utils/updateCustomer");
 const { levenshtein } = require("../utils/stringUtils");
 const botStatusRoute = require("../routes/botStatusRoute");
 const router = express.Router();
