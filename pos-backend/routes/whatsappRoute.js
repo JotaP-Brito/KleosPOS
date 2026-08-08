@@ -4,9 +4,9 @@
 const express = require("express");
 const axios = require("axios");
 const Order = require("../models/orderModel");
-const { parseWhatsAppOrderWithLLM } = require("../utils/llmParser");   // kept for future use
+// const { parseWhatsAppOrderWithLLM } = require("../utils/llmParser");   // LLM disabled – kept for future use
 const { parseOrderByKeywords } = require("../utils/keywordParser");
-const { mergeParsedResults } = require("../utils/orderMerge");
+const { mergeParsedResults } = require("../utils/orderMerge");         // kept for future use
 const {
   getSession,
   updateSession,
@@ -118,7 +118,7 @@ async function sendMenuImage(chatId, sessionId) {
 }
 
 // ─────────────────────────────────────────────
-// Fuzzy addition enrichment (only used for LLM results)
+// Fuzzy addition enrichment (only used for LLM results – kept for future reference)
 // ─────────────────────────────────────────────
 function enrichWithAdditions(parsedItems, rawMessage, products, additions) {
   const normalizedMessage = rawMessage
@@ -145,12 +145,11 @@ function enrichWithAdditions(parsedItems, rawMessage, products, additions) {
     for (let i = 0; i < messageWords.length; i++) {
       const token = messageWords[i];
       if (token.length < 3) continue;
-      if (numberWords.has(token) || /^\d+$/.test(token)) continue;   // 🆕 skip numbers
+      if (numberWords.has(token) || /^\d+$/.test(token)) continue;
       const synToken = synonyms[token] || token;
       const dist = Math.min(levenshtein(token, addNorm), levenshtein(synToken, addNorm));
       if (dist <= 2 && dist < bestDist) { bestDist = dist; bestTokenIndex = i; }
     }
-    // … rest unchanged …
     if (bestTokenIndex < 0) continue;
     if (bestTokenIndex > 0 && messageWords[bestTokenIndex - 1] === "sem") continue;
 
@@ -191,7 +190,6 @@ function etaMessage(orderType) {
 
 // ─────────────────────────────────────────────
 // Helper: split on " e um/uma" only when the next word is not an addition trigger.
-// Prevents "e um com catupiry" from being split apart.
 // ─────────────────────────────────────────────
 const ADDITION_TRIGGER_WORDS = new Set([
   "com", "mais", "sem", "acrescimo", "extra", "adicional", "tambem", "e"
@@ -270,7 +268,6 @@ const stepHandlers = {
     const { phone, from, rawMessage, sessionId } = ctx;
     const { products, additions } = await getMenuData();
 
-    // 🆕 Split on " e um / e uma" ONLY – keeps inner "e" intact, but avoids splitting addition phrases
     const segments = splitOnEUm(rawMessage);
     let allItems = [];
     for (const seg of segments) {
@@ -286,8 +283,6 @@ const stepHandlers = {
     const parsed = allItems.length > 0 ? { order: true, items: allItems, byKeyword: true } : null;
 
     if (parsed && parsed.items.length > 0) {
-      // (byKeyword is already true from above)
-
       const lowerRaw = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
       const hasMacarraoMention = /\b(macarrao|mac|espaguete|spaghetti|espagueti)\b/.test(lowerRaw);
       const hasMacarraoInItems = parsed.items.some((item) => item.name.toLowerCase().includes("macarrão"));
@@ -310,9 +305,7 @@ const stepHandlers = {
     }
 
     const lowerRaw = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-    // ✅ Also catch espaguete / spaghetti → treated as macarrao
     if (/\b(macarrao|mac|espaguete|spaghetti|espagueti)\b/.test(lowerRaw)) {
-      // If type is already in the message, pre-fill it
       const parts = extractMacarraoParts(rawMessage);
       updateSession(phone, {
         step: "CLARIFICAR_MACARRAO",
@@ -339,7 +332,6 @@ const stepHandlers = {
     const { products, additions } = await getMenuData();
 
     let parsed = null;
-    let usedLLM = false;
 
     if (!session.skipParsing) {
       const segments = splitOnEUm(rawMessage);
@@ -357,57 +349,22 @@ const stepHandlers = {
         }
       }
 
-      if (allItems.length > 0 && allLeftovers.length === 0) {
-        // Clean match — keyword parser explained the whole message. Fast path.
-        parsed = { order: true, items: allItems, byKeyword: true };
-      } else if (allItems.length > 0 && allLeftovers.length > 0) {
-        // Partial match — trust it provisionally but reconcile with the LLM,
-        // since some content in the message wasn't accounted for.
-        console.log(`⚠️ Match parcial para "${rawMessage}" — palavras não reconhecidas:`, allLeftovers);
-        let llmResult = null;
-        try {
-          const llmTimeout = setTimeout(() => {
-            sendWhatsAppReply(from, "Só um instante, estou conferindo seu pedido... 🍔", sessionId);
-          }, 2000);
-          llmResult = await parseWhatsAppOrderWithLLM(rawMessage, products, additions);
-          clearTimeout(llmTimeout);
-        } catch (err) {
-          console.error("Erro na LLM (reconciliação):", err.message);
-        }
-
-        if (llmResult && llmResult.items.length > allItems.length) {
-          usedLLM = true;
-          const merged = mergeParsedResults(allItems, llmResult.items);
-          parsed = { order: true, items: merged, byKeyword: false };
-          console.log(`✅ LLM encontrou itens adicionais. Itens finais:`, merged.map((i) => i.name));
-        } else {
-          // LLM didn't find more than the keyword parser — go with what we have,
-          // but keep the leftover warning for the confirmation step.
-          parsed = { order: true, items: allItems, byKeyword: true, hadLeftover: true };
-        }
+      if (allItems.length > 0) {
+        // Use only keyword parser – no LLM fallback.
+        // hadLeftover will show a warning in the confirmation if something wasn't recognized.
+        parsed = {
+          order: true,
+          items: allItems,
+          byKeyword: true,
+          hadLeftover: allLeftovers.length > 0,
+        };
       } else {
-        // Nothing matched at all — full LLM fallback.
-        console.log(`❌ Nenhum match por keyword para "${rawMessage}", tentando LLM…`);
-        try {
-          const llmTimeout = setTimeout(() => {
-            sendWhatsAppReply(from, "Só um instante, estou conferindo seu pedido... 🍔", sessionId);
-          }, 2000);
-          const llmResult = await parseWhatsAppOrderWithLLM(rawMessage, products, additions);
-          clearTimeout(llmTimeout);
-          if (llmResult) {
-            usedLLM = true;
-            parsed = llmResult;
-          }
-        } catch (err) {
-          console.error("Erro na LLM (fallback total):", err.message);
-        }
+        parsed = null;
       }
     } else {
       parsed = { order: true, items: session.items || [] };
       updateSession(phone, { skipParsing: false });
     }
-
-    // ... (the rest of RECEBER_ITENS continues exactly as before, down to the end of the handler)
 
     if (!parsed || parsed.order === false || !parsed.items || parsed.items.length === 0) {
       const lowerMsg = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
@@ -434,7 +391,6 @@ const stepHandlers = {
         await sendWhatsAppReply(from, fallback, sessionId);
       }
 
-      // 🆕 If the message was a delivery inquiry, remember the context
       const lowerCheck = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
       if (
         (lowerCheck.includes("?") || lowerCheck.includes("??")) &&
@@ -470,9 +426,8 @@ const stepHandlers = {
       return { ...item, price: match ? match.price : 0 };
     });
 
-    if (!parsed.byKeyword) {
-      parsed.items = enrichWithAdditions(parsed.items, rawMessage, products, additions);
-    }
+    // LLM enrichment disabled – keyword parser handles additions itself
+    // if (!parsed.byKeyword) { ... }
 
     let orderItems = parsed.items.map((item) => ({
       name: item.name, price: item.price || 0, quantity: item.quantity || 1,
@@ -488,7 +443,6 @@ const stepHandlers = {
 
       const rawLower = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-      // Collect every "N sem <ingredient>" pattern in the raw message
       const semClauses = [];
       const semRe = /(\d+)\s*sem\s+(\w+)/gi;
       let m;
@@ -505,7 +459,6 @@ const stepHandlers = {
 
       for (const clause of semClauses) {
         if (clause.qty <= 0) continue;
-        // If the requested "sem" quantity exceeds remaining items, still apply the observation to all remaining.
         const effectiveQty = Math.min(clause.qty, remaining);
         if (effectiveQty <= 0) continue;
         remaining -= effectiveQty;
@@ -541,7 +494,6 @@ const stepHandlers = {
         .map((opt, i) => `${i + 1} - ${opt.name}`)
         .join("\n");
 
-      // 🆕 Find the item the alias word is closest to
       const aliasWord = unknownAddition.aliasWord;
       const msgWords = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().split(/\s+/);
       const aliasWordIndex = msgWords.indexOf(aliasWord);
@@ -564,7 +516,7 @@ const stepHandlers = {
       updateSession(phone, {
         step: "PERGUNTAR_ADICIONAL",
         pendingAdditionAlias: unknownAddition,
-        pendingAdditionTargetIndex: closestIdx,   // 🆕
+        pendingAdditionTargetIndex: closestIdx,
         items: finalItems,
       });
       await sendWhatsAppReply(
@@ -575,7 +527,7 @@ const stepHandlers = {
       return true;
     }
 
-    // ── Drink disambiguation (bare "coca", "fanta", etc.) ──────────────────
+    // ── Drink disambiguation ──────────────────
     for (let i = 0; i < finalItems.length; i++) {
       const item = finalItems[i];
       const itemNameNorm = item.name
@@ -636,8 +588,8 @@ const stepHandlers = {
       updateSession(phone, { step: "CONFIRMAR" });
       const { total, tipo, itens } = buildOrderSummary(getSession(phone));
       const warning = parsed?.hadLeftover
-    ? "\n\n⚠️ Notei algo na sua mensagem que não reconheci — confira se está tudo certo."
-    : "";
+        ? "\n\n⚠️ Notei algo na sua mensagem que não reconheci — confira se está tudo certo."
+        : "";
       await sendWhatsAppReply(from, `📝 Resumo do pedido:\n\n${itens}\n\n🏷️ ${tipo}\n💳 ${sess.payment}\n💰 Total: R$ ${total.toFixed(2)}${warning}\n\nConfirma? (sim / não)`, sessionId);
       return true;
     }
@@ -858,14 +810,13 @@ const stepHandlers = {
   async PERGUNTAR_ADICIONAL(ctx) {
     const { phone, from, rawMessage, sessionId, session } = ctx;
     const aliasInfo = session.pendingAdditionAlias;
-    const targetIndex = session.pendingAdditionTargetIndex;  // 🆕 which item gets the addition
+    const targetIndex = session.pendingAdditionTargetIndex;
 
     if (!aliasInfo) {
       updateSession(phone, { step: "RECEBER_ITENS" });
       return false;
     }
 
-    // Auto‑attach if only one option
     if (aliasInfo.options.length === 1) {
       const chosenOption = aliasInfo.options[0];
       const items = session.items || [];
@@ -889,7 +840,6 @@ const stepHandlers = {
       return false;
     }
 
-    // Multiple options – ask the customer to choose
     const choice = rawMessage.trim();
     let chosenOption = null;
     if (/^\d+$/.test(choice)) {
@@ -933,7 +883,7 @@ const stepHandlers = {
     return false;
   },
 
-  // ── PERGUNTAR_BEBIDA (drink disambiguation) ──────────────────────────────
+  // ── PERGUNTAR_BEBIDA ──────────────────────────────────────────────────────
   async PERGUNTAR_BEBIDA(ctx) {
     const { phone, from, rawMessage, sessionId, session } = ctx;
     const options = session.pendingDrinkOptions;
@@ -976,7 +926,6 @@ const stepHandlers = {
       return true;
     }
 
-    // Replace the ambiguous placeholder item with the chosen product
     const oldItem = items[targetIndex];
     items[targetIndex] = {
       name: chosenOption.name,
@@ -994,7 +943,7 @@ const stepHandlers = {
       skipParsing: true,
     });
     await sendWhatsAppReply(from, `✅ Bebida alterada para: ${chosenOption.name}`, sessionId);
-    return false; // fall through to RECEBER_ITENS to continue normal flow
+    return false;
   },
 
   // ── AGUARDAR_TAXA ─────────────────────────────────────────────────────────
@@ -1004,7 +953,7 @@ const stepHandlers = {
     return true;
   },
 
-  // ── ENCERRAR (handoff to human) ─────────────────────────────────────────
+  // ── ENCERRAR ─────────────────────────────────────────────────────────────
   async ENCERRAR(ctx) {
     const { phone, from, sessionId } = ctx;
     await sendWhatsAppReply(from, "Certo! Um atendente vai conversar com você, aguarde um instante. 👩‍🍳", sessionId);
@@ -1047,7 +996,7 @@ const stepHandlers = {
         return true;
       }
 
-      // Normal path (Takeaway / Dine-in): create order from session
+      // Normal path (Takeaway / Dine-in)
       if (sess.orderType === "Delivery" && !sess.pendingOrderId) {
         console.error(`⚠️  CONFIRMAR reached for Delivery session without pendingOrderId – phone: ${phone}`);
         await sendWhatsAppReply(from, "Houve um problema ao localizar o seu pedido. Por favor, tente novamente.", sessionId);
@@ -1089,7 +1038,6 @@ const stepHandlers = {
       muteSession(phone);
 
     } else if (cl?.confirmado === false) {
-      // ── Handoff to human ──
       await sendWhatsAppReply(from, "Certo! Um atendente vai conversar com você, aguarde um instante. 👩‍🍳", sessionId);
       muteSession(phone);
       return true;
@@ -1117,10 +1065,65 @@ router.post("/webhook", async (req, res) => {
     if (!rawMessage) return res.json({ status: "empty_message" });
 
     console.log(`📩 WhatsApp de ${contact?.name || phone}: "${rawMessage}"`);
+
+    // ── TRACKING MODE: silently log order, no replies, no POS interaction ──
+    if (process.env.WHATSAPP_TRACKING_MODE === "true") {
+      const { products, additions } = await getMenuData();
+      const normalizedMsg = normalizeOrderText(rawMessage);
+
+      let parsedItems = [];
+      try {
+        const keywordResult = parseOrderByKeywords(normalizedMsg, products, additions);
+        if (keywordResult && keywordResult.items.length > 0) {
+          parsedItems = keywordResult.items;
+        }
+        // LLM fallback disabled – only keyword parsing
+      } catch (e) {
+        console.error("Tracking parse error:", e.message);
+      }
+
+      if (parsedItems.length > 0) {
+        const orderType = extractOrderType(rawMessage) || "Takeaway";
+        const payment = extractPayment(rawMessage) || "Não informado";
+        const address = orderType === "Delivery" ? extractAddress(rawMessage) || "Não informado" : undefined;
+
+        const total = parsedItems.reduce((sum, item) => {
+          const addPrice = (item.additions || []).reduce((a, add) => a + (add.price || 0), 0);
+          return sum + (item.price + addPrice) * (item.quantity || 1);
+        }, 0);
+
+        const TrackedOrder = require("../models/TrackedOrder");
+        await TrackedOrder.create({
+          phone,
+          customerName: contact?.name || "Cliente WhatsApp",
+          items: parsedItems,
+          orderType,
+          deliveryAddress: address,
+          paymentMethod: payment,
+          total,
+          originalMessage: rawMessage,
+        });
+
+        try {
+          await updateCustomerRecord(phone, contact?.name || "Cliente WhatsApp", from, total);
+        } catch (e) {
+          console.error("Customer update error:", e.message);
+        }
+
+        console.log(`✅ Pedido rastreado: ${phone} – ${parsedItems.length} itens, R$${total.toFixed(2)}`);
+      } else {
+        console.log(`ℹ️ Nenhum item detectado na mensagem de ${phone}`);
+      }
+
+      return res.json({ status: "tracked" });
+    }
+    // ── END OF TRACKING MODE ────────────────────────────────────────────────
+
     await sendTyping(from, sessionId);
 
-    // ---- Cardápio (menu image) – still handled early ----
     const lowerMsg = rawMessage.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+    // ---- Cardápio ----
     if (lowerMsg.includes("cardapio") || lowerMsg.includes("menu")) {
       const sent = await sendMenuImage(from, sessionId);
       if (!sent) await sendWhatsAppReply(from, "Desculpe, não consegui enviar a imagem do cardápio agora. Tente novamente em instantes! 🙏", sessionId);
@@ -1146,7 +1149,7 @@ router.post("/webhook", async (req, res) => {
       return res.json({ status: "opted_out" });
     }
 
-    // ---- Get current session (the ONLY declaration) ----
+    // ---- Get current session ----
     let session = getSession(phone);
 
     // ---- Bot turned off ----
@@ -1154,18 +1157,17 @@ router.post("/webhook", async (req, res) => {
       return res.json({ status: "bot_offline" });
     }
 
-    // ---- Muted session check (post‑order) – completely silent unless customer wants a new order ----
+    // ---- Muted session check ----
     if (session.muted) {
       if (/\b(novo pedido|quero pedir|fazer pedido)\b/i.test(lowerMsg)) {
         unmuteSession(phone);
         session = getSession(phone);
       } else {
-        // Ignore everything else – no reply at all
         return res.json({ status: "muted" });
       }
     }
 
-    // ---- Admin-only “métricas” command ----
+    // ---- Admin-only metrics ----
     if (lowerMsg === "metricas" || lowerMsg === "métricas") {
       const adminPhone = process.env.ADMIN_PHONE;
       if (adminPhone && from === adminPhone) {
@@ -1202,11 +1204,6 @@ router.post("/webhook", async (req, res) => {
 
     // ---- State machine ----
     const ctx = { phone, from, rawMessage, sessionId, session, contact };
-
-    // Drive the state machine. When a handler returns false it has already
-    // transitioned the session to the next step, so we re-read the session
-    // to pick up the new step rather than relying on a hardcoded fallthrough list.
-    // A visited guard prevents infinite loops if a handler forgets to advance.
     const visited = new Set();
 
     for (; ;) {
@@ -1219,8 +1216,7 @@ router.post("/webhook", async (req, res) => {
 
       ctx.session = getSession(phone);
       const handled = await handler(ctx);
-      if (handled) break; // handler consumed the message – stop
-      // handled === false → handler advanced the step; loop to run the new step
+      if (handled) break;
     }
 
     return res.json({ status: "ok" });
