@@ -63,8 +63,8 @@ async function runFavouriteReminder() {
 // 3. CAMPAIGN: Win-back drip sequence (escalating offers)
 // ─────────────────────────────────────────────────────────
 const WINBACK_STEPS = [
-  { daysAfter: 3,  code: "VOLTE10", discount: 10, msg: (name) => `Oi ${name}! Que saudade! Volte e ganhe 10% de desconto com o cupom VOLTE10. 🍔` },
-  { daysAfter: 7,  code: "VOLTE20", discount: 20, msg: (name) => `Ei ${name}, 20% de desconto só hoje! Use VOLTE20. 😋` },
+  { daysAfter: 3, code: "VOLTE10", discount: 10, msg: (name) => `Oi ${name}! Que saudade! Volte e ganhe 10% de desconto com o cupom VOLTE10. 🍔` },
+  { daysAfter: 7, code: "VOLTE20", discount: 20, msg: (name) => `Ei ${name}, 20% de desconto só hoje! Use VOLTE20. 😋` },
   { daysAfter: 14, code: "VOLTE25", discount: 25, msg: (name) => `Última chance, ${name}! 25% off com VOLTE25 + brinde surpresa. 🎁` },
   { daysAfter: 30, code: "VOLTE30", discount: 30, msg: (name) => `Sentimos sua falta, ${name}! Volte com 30% de desconto usando VOLTE30. ❤️` },
 ];
@@ -88,7 +88,7 @@ async function runWinbackCampaign() {
           cust.lastWinbackSequence = i + 1;
           cust.lastWinbackDate = new Date();
           await cust.save();
-          console.log(`Winback step ${i+1} sent to ${cust.phone}`);
+          console.log(`Winback step ${i + 1} sent to ${cust.phone}`);
         } catch (err) { console.error(`Err ${cust.phone}: ${err.message}`); }
         break; // only one message per day
       }
@@ -250,6 +250,11 @@ cron.schedule("0 11 * * 5", () => {
   console.log("--- Cross-sell ---");
   runCrossSell().catch(console.error);
 }, { timezone: "America/Sao_Paulo" });
+// Addition Upsell: every Wednesday at 11:00 AM
+cron.schedule("0 11 * * 3", () => {
+  console.log("--- Addition Upsell ---");
+  runAdditionUpsell().catch(console.error);
+}, { timezone: "America/Sao_Paulo" });
 
 // Upsell: every Thursday at 11:00 AM
 cron.schedule("0 11 * * 4", () => {
@@ -283,6 +288,11 @@ router.post("/run-crosssell", async (req, res) => {
 router.post("/run-upsell", async (req, res) => {
   if (req.body.secret !== ADMIN_SECRET) return res.status(403).json({ error: "Forbidden" });
   await runUpsell();
+  res.json({ status: "ok" });
+});
+router.post("/run-addition-upsell", async (req, res) => {
+  if (req.body.secret !== ADMIN_SECRET) return res.status(403).json({ error: "Forbidden" });
+  await runAdditionUpsell();
   res.json({ status: "ok" });
 });
 
