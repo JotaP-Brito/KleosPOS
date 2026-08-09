@@ -16,6 +16,7 @@ const {
 } = require("../utils/sessionManager");
 const { getMenuData } = require("../utils/menuCache");
 const { normalizeOrderText } = require("../utils/orderNormalizer");
+const crossSellUpsellConfig = require("../config/crossSellUpsell");
 const {
   extractOrderType,
   extractPayment,
@@ -1111,6 +1112,50 @@ router.post("/webhook", async (req, res) => {
         }
 
         console.log(`✅ Pedido rastreado: ${phone} – ${parsedItems.length} itens, R$${total.toFixed(2)}`);
+
+        // ── Instant cross‑sell / addition upsell ──────────────────────────
+        const hasBurger = parsedItems.some(i =>
+          i.name.toLowerCase().includes("x-") ||
+          i.name === "Hamburguer" ||
+          i.name === "Hambúrguer Especial"
+        );
+        const hasDrink = parsedItems.some(i =>
+          /coca|guarana|fanta|sprite|suco|agua|mate|refrigerante/i.test(i.name)
+        );
+        const hasSide = parsedItems.some(i =>
+          /batata|onion|nuggets|macarrão|macarrao/i.test(i.name)
+        );
+
+        // Cross‑sell: only burger(s), no drink, no side → suggest drink
+        if (hasBurger && !hasDrink && !hasSide) {
+          const suggestion = crossSellUpsellConfig.crossSellCategories["Sanduíches"][0]; // "Coca Cola Lata"
+          const msg = `🍔 Que tal completar seu combo? Adicione uma ${suggestion} por apenas R$6 e ganhe 5% de desconto com o cupom CROSS5.`;
+          try {
+            await sendWhatsAppReply(from, msg, sessionId);
+            console.log(`Cross‑sell instant sent to ${phone}`);
+          } catch (e) {
+            console.error("Cross‑sell send error:", e.message);
+          }
+        }
+
+        // Addition upsell: burger without a popular addition
+        if (hasBurger) {
+          const orderedAdditions = new Set();
+          parsedItems.forEach(i => (i.additions || []).forEach(a => orderedAdditions.add(a.name)));
+          for (const add of crossSellUpsellConfig.popularAdditions) {
+            if (!orderedAdditions.has(add.name)) {
+              try {
+                await sendWhatsAppReply(from, add.msg, sessionId);
+                console.log(`Addition upsell instant ("${add.name}") sent to ${phone}`);
+                break; // only one suggestion per order
+              } catch (e) {
+                console.error("Addition upsell error:", e.message);
+              }
+            }
+          }
+        }
+        // ── Fim das reações instantâneas ──────────────────────────────────
+
       } else {
         console.log(`ℹ️ Nenhum item detectado na mensagem de ${phone}`);
       }
