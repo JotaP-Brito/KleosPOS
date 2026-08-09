@@ -1121,8 +1121,7 @@ router.post("/webhook", async (req, res) => {
 
         console.log(`✅ Pedido rastreado: ${phone} – ${parsedItems.length} itens, R$${total.toFixed(2)}`);
 
-        // ── Categorize items using the menu data ──────────────────────────
-        // Normalize product name exactly like normalizeOrderText does (NFD + strip diacritics + lowercase)
+        // ── Normalize product name for matching (remove diacritics, lowercase) ──
         const normalizeForMatch = (str) =>
           (str || "")
             .normalize("NFD")
@@ -1131,7 +1130,7 @@ router.post("/webhook", async (req, res) => {
 
         const productMap = new Map(products.map(p => [normalizeForMatch(p.name), p]));
         const categories = parsedItems.map(item => {
-          const prod = productMap.get(item.name.toLowerCase());
+          const prod = productMap.get(normalizeForMatch(item.name));
           return prod ? prod.category : null;
         });
 
