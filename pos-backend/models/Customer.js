@@ -11,6 +11,7 @@ const customerSchema = new mongoose.Schema({
   whatsappChatId: String,          // e.g. "5511999999999@c.us"
   lastOrderDate: Date,
   orderCount: { type: Number, default: 0 },
+  favoriteReminderDay: { type: Number, min: 0, max: 6 },   // 0=Sun … 6=Sat
   totalSpent: { type: Number, default: 0 },
   optedOut: { type: Boolean, default: false },
 }, { timestamps: true });
