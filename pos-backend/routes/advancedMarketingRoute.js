@@ -7,6 +7,7 @@ const Order = require("../models/orderModel");
 const sendWhatsAppMessage = require("../utils/sendWhatsAppMessage");
 const crossSellUpsellConfig = require("../config/crossSellUpsell");
 
+
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "admin123";
 
 // ─────────────────────────────────────────────────────────
@@ -176,6 +177,46 @@ async function runUpsell() {
           await sendWhatsAppMessage(cust.whatsappChatId, msg);
           console.log(`Upsell sent to ${cust.phone} (${product} → ${upgrade})`);
           break; // only one upsell per customer per run
+        } catch (err) { console.error(`Err ${cust.phone}: ${err.message}`); }
+      }
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+}
+// ─────────────────────────────────────────────────────────
+// 7. CAMPAIGN: Addition Upsell (popular extras)
+// ─────────────────────────────────────────────────────────
+async function runAdditionUpsell() {
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const customers = await Customer.find({
+    optedOut: false,
+    whatsappChatId: { $exists: true, $ne: "" },
+    lastOrderDate: { $gte: sevenDaysAgo },
+  });
+  console.log(`Addition Upsell – checking ${customers.length} customers`);
+
+  for (const cust of customers) {
+    const orders = await Order.find({
+      "customerDetails.phone": cust.phone,
+      orderDate: { $gte: sevenDaysAgo },
+    });
+
+    // Check if the customer ordered any sandwich/pasta but didn't add a specific popular addition
+    const orderedAdditions = new Set();
+    orders.forEach(o => o.items.forEach(i => (i.additions || []).forEach(a => orderedAdditions.add(a.name))));
+
+    const hasMain = orders.some(o =>
+      o.items.some(i => i.name.includes("X-") || i.name === "Hamburguer" || i.name === "Hambúrguer Especial" || i.name.includes("Macarrão"))
+    );
+    if (!hasMain) continue;   // only target customers who ordered a main dish
+
+    // Find the first popular addition they didn't order yet
+    for (const add of crossSellUpsellConfig.popularAdditions) {
+      if (!orderedAdditions.has(add.name)) {
+        try {
+          await sendWhatsAppMessage(cust.whatsappChatId, add.msg);
+          console.log(`Addition upsell "${add.name}" sent to ${cust.phone}`);
+          break;   // send only one suggestion per customer per run
         } catch (err) { console.error(`Err ${cust.phone}: ${err.message}`); }
       }
     }
