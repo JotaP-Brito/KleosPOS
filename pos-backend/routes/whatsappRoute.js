@@ -1061,14 +1061,22 @@ router.post("/webhook", async (req, res) => {
     if (event !== "message.received") return res.json({ status: "ignored" });
 
     const { from, body, contact } = data;
-    const phone = from.replace("@c.us", "").replace("@lid", "");
+    console.log("DEBUG contact:", JSON.stringify(contact));
+    console.log("DEBUG data.from:", from);
+    console.log("DEBUG data:", JSON.stringify(data).slice(0, 300)); // first 300 chars
+    // Extract the real phone number:
+    // - For regular users, `from` is "5511...@c.us" → use that.
+    // - For linked devices, `from` is an internal ID; the real number lives in `contact.number` or `contact.jid`.
+    let phone = contact?.number || contact?.jid || from.replace("@c.us", "").replace("@lid", "");
+    // Clean up any @suffixes just in case
+    phone = phone.replace(/@c\.us|@lid/i, "").trim();
     const rawMessage = (body || "").trim();
     if (!rawMessage) return res.json({ status: "empty_message" });
 
     console.log(`📩 WhatsApp de ${contact?.name || phone}: "${rawMessage}"`);
 
     // ── TRACKING MODE: silently log order, no replies, no POS interaction ──
-     if (process.env.WHATSAPP_TRACKING_MODE === "true") {
+    if (process.env.WHATSAPP_TRACKING_MODE === "true") {
       const { products, additions } = await getMenuData();
       const normalizedMsg = normalizeOrderText(rawMessage);
 
@@ -1113,21 +1121,26 @@ router.post("/webhook", async (req, res) => {
 
         console.log(`✅ Pedido rastreado: ${phone} – ${parsedItems.length} itens, R$${total.toFixed(2)}`);
 
-        // ── Instant reaction: ONLY ONE suggestion per order ──────────────
-        const hasBurger = parsedItems.some(i =>
-          i.name.toLowerCase().includes("x-") ||
-          i.name === "Hamburguer" ||
-          i.name === "Hambúrguer Especial"
-        );
-        const hasDrink = parsedItems.some(i =>
-          /coca|guarana|fanta|sprite|suco|agua|mate|refrigerante/i.test(i.name)
-        );
-        const hasSide = parsedItems.some(i =>
-          /batata|onion|nuggets|macarrão|macarrao/i.test(i.name)
-        );
+        // ── Categorize items using the menu data ──────────────────────────
+        // Normalize product name exactly like normalizeOrderText does (NFD + strip diacritics + lowercase)
+        const normalizeForMatch = (str) =>
+          (str || "")
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase();
 
-        // Priority 1: Cross‑sell (only if no drink and no side)
-        if (hasBurger && !hasDrink && !hasSide) {
+        const productMap = new Map(products.map(p => [normalizeForMatch(p.name), p]));
+        const categories = parsedItems.map(item => {
+          const prod = productMap.get(item.name.toLowerCase());
+          return prod ? prod.category : null;
+        });
+
+        const hasMain = categories.some(cat => cat === "Sanduíches" || cat === "Macarrão");
+        const hasDrink = categories.some(cat => cat === "Bebidas");
+        const hasSide = categories.some(cat => cat === "Acompanhamentos");   // future‑proof
+
+        // Priority 1: Cross‑sell (suggest drink if only main dish ordered)
+        if (hasMain && !hasDrink && !hasSide) {
           const suggestion = crossSellUpsellConfig.crossSellCategories["Sanduíches"][0]; // "Coca Cola Lata"
           const msg = `🍔 Que tal completar seu combo? Adicione uma ${suggestion} por apenas R$6 e ganhe 5% de desconto com o cupom CROSS5.`;
           try {
@@ -1138,7 +1151,7 @@ router.post("/webhook", async (req, res) => {
           }
         } else {
           // Priority 2: Addition upsell (only if no cross‑sell)
-          if (hasBurger) {
+          if (hasMain) {
             const orderedAdditions = new Set();
             parsedItems.forEach(i => (i.additions || []).forEach(a => orderedAdditions.add(a.name)));
             for (const add of crossSellUpsellConfig.popularAdditions) {
@@ -1154,7 +1167,6 @@ router.post("/webhook", async (req, res) => {
             }
           }
         }
-        // ── Fim das reações instantâneas ──────────────────────────────────
 
       } else {
         console.log(`ℹ️ Nenhum item detectado na mensagem de ${phone}`);
