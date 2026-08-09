@@ -28,10 +28,10 @@ module.exports = {
   },
 
   popularAdditions: [
-    { name: "Bacon",    price: 4, msg: "🥓 Adicione Bacon crocante por apenas R$4! Use BACON10 e ganhe 10% off." },
-    { name: "Cheddar",  price: 4, msg: "🧀 Cheddar derretido por só R$4. Cupom CHED10." },
-    { name: "Catupiry", price: 4, msg: "🍦 Catupiry cremoso por R$4. Use CATU10." },
-    { name: "Carne 120g Picanha", price: 5, msg: "🥩 Carne de picanha (120g) por apenas R$5 a mais. Cupom PICA10." },
-    { name: "Ovo",      price: 2, msg: "🍳 Um ovo extra por R$2. Use OVO10." },
+    { name: "Bacon",    price: 4, msg: "🥓 Adicione Bacon crocante por apenas R$4!" },
+    { name: "Cheddar",  price: 4, msg: "🧀 Cheddar derretido por só R$4." },
+    { name: "Catupiry", price: 4, msg: "🍦 Catupiry cremoso por R$4." },
+    { name: "Carne 120g Picanha", price: 5, msg: "🥩 Carne de picanha (120g) por apenas R$5 a mais." },
+    { name: "Ovo",      price: 2, msg: "🍳 Um ovo extra por R$2." },
   ]
 };

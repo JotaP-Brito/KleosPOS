@@ -1068,7 +1068,7 @@ router.post("/webhook", async (req, res) => {
     console.log(`📩 WhatsApp de ${contact?.name || phone}: "${rawMessage}"`);
 
     // ── TRACKING MODE: silently log order, no replies, no POS interaction ──
-    if (process.env.WHATSAPP_TRACKING_MODE === "true") {
+     if (process.env.WHATSAPP_TRACKING_MODE === "true") {
       const { products, additions } = await getMenuData();
       const normalizedMsg = normalizeOrderText(rawMessage);
 
@@ -1113,7 +1113,7 @@ router.post("/webhook", async (req, res) => {
 
         console.log(`✅ Pedido rastreado: ${phone} – ${parsedItems.length} itens, R$${total.toFixed(2)}`);
 
-        // ── Instant cross‑sell / addition upsell ──────────────────────────
+        // ── Instant reaction: ONLY ONE suggestion per order ──────────────
         const hasBurger = parsedItems.some(i =>
           i.name.toLowerCase().includes("x-") ||
           i.name === "Hamburguer" ||
@@ -1126,7 +1126,7 @@ router.post("/webhook", async (req, res) => {
           /batata|onion|nuggets|macarrão|macarrao/i.test(i.name)
         );
 
-        // Cross‑sell: only burger(s), no drink, no side → suggest drink
+        // Priority 1: Cross‑sell (only if no drink and no side)
         if (hasBurger && !hasDrink && !hasSide) {
           const suggestion = crossSellUpsellConfig.crossSellCategories["Sanduíches"][0]; // "Coca Cola Lata"
           const msg = `🍔 Que tal completar seu combo? Adicione uma ${suggestion} por apenas R$6 e ganhe 5% de desconto com o cupom CROSS5.`;
@@ -1136,20 +1136,20 @@ router.post("/webhook", async (req, res) => {
           } catch (e) {
             console.error("Cross‑sell send error:", e.message);
           }
-        }
-
-        // Addition upsell: burger without a popular addition
-        if (hasBurger) {
-          const orderedAdditions = new Set();
-          parsedItems.forEach(i => (i.additions || []).forEach(a => orderedAdditions.add(a.name)));
-          for (const add of crossSellUpsellConfig.popularAdditions) {
-            if (!orderedAdditions.has(add.name)) {
-              try {
-                await sendWhatsAppReply(from, add.msg, sessionId);
-                console.log(`Addition upsell instant ("${add.name}") sent to ${phone}`);
-                break; // only one suggestion per order
-              } catch (e) {
-                console.error("Addition upsell error:", e.message);
+        } else {
+          // Priority 2: Addition upsell (only if no cross‑sell)
+          if (hasBurger) {
+            const orderedAdditions = new Set();
+            parsedItems.forEach(i => (i.additions || []).forEach(a => orderedAdditions.add(a.name)));
+            for (const add of crossSellUpsellConfig.popularAdditions) {
+              if (!orderedAdditions.has(add.name)) {
+                try {
+                  await sendWhatsAppReply(from, add.msg, sessionId);
+                  console.log(`Addition upsell instant ("${add.name}") sent to ${phone}`);
+                  break; // only one suggestion
+                } catch (e) {
+                  console.error("Addition upsell error:", e.message);
+                }
               }
             }
           }

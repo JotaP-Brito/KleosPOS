@@ -43,7 +43,7 @@ async function runFavouriteReminder() {
   });
   console.log(`Favourite reminder – ${customers.length} customers today`);
   for (const cust of customers) {
-    const msg = `Oi ${cust.name || "cliente"}! Seu favorito, ${cust.favouriteItem}, está te esperando… Peça agora e ganhe 10% de desconto com o cupom FAV10. 🍔`;
+    const msg = `Oi ${cust.name || "cliente"}! Seu favorito, ${cust.favouriteItem}, está te esperando… Peça agora e ganhe 10% de desconto. 🍔`;
     try {
       await sendWhatsAppMessage(cust.whatsappChatId, msg);
       console.log(`Favourite sent to ${cust.phone}`);
@@ -64,7 +64,7 @@ async function runHappyHour() {
     whatsappChatId: { $exists: true, $ne: "" },
     lastOrderDate: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
   });
-  const msg = "🍟 HAPPY HOUR! 10% de desconto em todo o pedido das 21h às 23h. Use o cupom HAPPY10. Peça já! ⚡";
+  const msg = "🍟 HAPPY HOUR! 10% de desconto em todo o pedido das 21h às 23h. Peça já! ⚡";
   for (const cust of customers) {
     try {
       await sendWhatsAppMessage(cust.whatsappChatId, msg);
@@ -153,10 +153,10 @@ cron.schedule("0 11 * * 3", runAdditionUpsell, { timezone: "America/Sao_Paulo" }
 // 6. Win-back drip (unchanged)
 // ─────────────────────────────────────────────────────────
 const WINBACK_STEPS = [
-  { daysAfter: 3,  code: "VOLTE10", discount: 10, msg: (name) => `Oi ${name}! Que saudade! Volte e ganhe 10% de desconto com o cupom VOLTE10. 🍔` },
-  { daysAfter: 7,  code: "VOLTE20", discount: 20, msg: (name) => `Ei ${name}, 20% de desconto só hoje! Use VOLTE20. 😋` },
-  { daysAfter: 14, code: "VOLTE25", discount: 25, msg: (name) => `Última chance, ${name}! 25% off com VOLTE25 + brinde surpresa. 🎁` },
-  { daysAfter: 30, code: "VOLTE30", discount: 30, msg: (name) => `Sentimos sua falta, ${name}! Volte com 30% de desconto usando VOLTE30. ❤️` },
+  { daysAfter: 3,  code: "VOLTE10", discount: 10, msg: (name) => `Oi ${name}! Que saudade! Volte e ganhe 10% de desconto.. 🍔` },
+  { daysAfter: 7,  code: "VOLTE20", discount: 20, msg: (name) => `Ei ${name}, 20% de desconto só hoje!. 😋` },
+  { daysAfter: 14, code: "VOLTE25", discount: 25, msg: (name) => `Última chance, ${name}! 25% off+ brinde surpresa. 🎁` },
+  { daysAfter: 30, code: "VOLTE30", discount: 30, msg: (name) => `Sentimos sua falta, ${name}! Volte com 30% de desconto. ❤️` },
 ];
 
 async function runWinbackCampaign() {
