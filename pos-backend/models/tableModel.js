@@ -13,4 +13,6 @@ const tableSchema = new mongoose.Schema({
     currentOrder: {type: mongoose.Schema.Types.ObjectId, ref: "Order"}
 });
 
+tableSchema.index({ status: 1 });
+
 module.exports = mongoose.model("Table", tableSchema);

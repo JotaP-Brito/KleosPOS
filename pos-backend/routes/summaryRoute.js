@@ -17,38 +17,39 @@ router.get("/metrics", async (req, res, next) => {
     const today = new Date();
     const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
 
-    const ordersToday = await Order.countDocuments({
-      orderDate: { $gte: startOfToday }
-    });
-
-    const revenueData = await Order.aggregate([
-      { $match: { orderDate: { $gte: startOfToday } } },
-      { $group: { _id: null, total: { $sum: "$bills.totalWithTax" } } },
+    const nonCancelledToday = { orderDate: { $gte: startOfToday }, orderStatus: { $ne: "Cancelled" } };
+    // These are independent read operations. Running them together avoids serial
+    // database latency every time the dashboard refreshes.
+    const [
+      ordersToday,
+      revenueData,
+      completedToday,
+      activeOrders,
+      ordersReady,
+      avgTimeData,
+      totalCustomers,
+      totalCategories,
+      totalDishes,
+    ] = await Promise.all([
+      Order.countDocuments(nonCancelledToday),
+      Order.aggregate([
+        { $match: nonCancelledToday },
+        { $group: { _id: null, total: { $sum: "$bills.totalWithTax" } } },
+      ]),
+      Order.countDocuments({ orderStatus: "Completed", updatedAt: { $gte: startOfToday } }),
+      Order.countDocuments({ orderStatus: { $nin: ["Completed", "Cancelled"] } }),
+      Order.countDocuments({ orderStatus: "Ready" }),
+      Order.aggregate([
+        { $match: { readyAt: { $gte: startOfToday, $ne: null }, orderStatus: { $ne: "Cancelled" } } },
+        { $project: { timeDiff: { $subtract: ["$readyAt", "$orderDate"] } } },
+        { $group: { _id: null, average: { $avg: "$timeDiff" } } },
+      ]),
+      User.countDocuments(),
+      Category.countDocuments(),
+      Product.countDocuments(),
     ]);
     const revenueToday = revenueData[0]?.total || 0;
-
-    const completedToday = await Order.countDocuments({
-      orderStatus: "Completed",
-      updatedAt: { $gte: startOfToday }
-    });
-
-    const activeOrders = await Order.countDocuments({
-      orderStatus: { $nin: ["Completed", "Cancelled"] }
-    });
-
-    const ordersReady = await Order.countDocuments({ orderStatus: "Ready" });
-
-    // Daily average preparation time (today only)
-    const avgTimeData = await Order.aggregate([
-      { $match: { readyAt: { $gte: startOfToday, $ne: null } } },
-      { $project: { timeDiff: { $subtract: ["$readyAt", "$orderDate"] } } },
-      { $group: { _id: null, average: { $avg: "$timeDiff" } } },
-    ]);
     const averageTime = avgTimeData.length ? Math.round(avgTimeData[0].average / 60000) : 0;
-
-    const totalCustomers = await User.countDocuments();
-    const totalCategories = await Category.countDocuments();
-    const totalDishes = await Product.countDocuments();
 
     res.status(200).json({
       success: true,
@@ -73,7 +74,7 @@ router.get("/metrics", async (req, res, next) => {
 // @route   GET /api/summary/history
 router.get("/history", async (req, res, next) => {
   try {
-    const history = await DailySummary.find().sort({ date: -1 }).limit(30);
+    const history = await DailySummary.find().sort({ date: -1 }).limit(30).lean();
     res.status(200).json({ success: true, data: history });
   } catch (error) {
     next(error);
@@ -94,7 +95,7 @@ router.get("/items-report", async (req, res, next) => {
     const end = new Date(date + "T23:59:59.999");
 
     const report = await Order.aggregate([
-      { $match: { orderDate: { $gte: start, $lt: end } } },
+      { $match: { orderDate: { $gte: start, $lt: end }, orderStatus: { $ne: "Cancelled" } } },
       { $unwind: "$items" },
       {
         $group: {
@@ -129,40 +130,24 @@ router.post("/reset", isVerifiedUser, admin, async (req, res, next) => {
     const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
-    const orderCount = await Order.countDocuments({ orderDate: { $gte: start, $lt: end } });
-    const revenueData = await Order.aggregate([
-      { $match: { orderDate: { $gte: start, $lt: end } } },
-      { $group: { _id: null, total: { $sum: "$bills.totalWithTax" } } },
+    const nonCancelledPeriod = { orderDate: { $gte: start, $lt: end }, orderStatus: { $ne: "Cancelled" } };
+    const [orderCount, revenueData, completedCount, cashCount, cardCount, pixCount, avgTimeData] = await Promise.all([
+      Order.countDocuments(nonCancelledPeriod),
+      Order.aggregate([
+        { $match: nonCancelledPeriod },
+        { $group: { _id: null, total: { $sum: "$bills.totalWithTax" } } },
+      ]),
+      Order.countDocuments({ orderStatus: "Completed", updatedAt: { $gte: start, $lt: end } }),
+      Order.countDocuments({ ...nonCancelledPeriod, paymentStatus: "Paid", paymentMethod: "Dinheiro" }),
+      Order.countDocuments({ ...nonCancelledPeriod, paymentStatus: "Paid", paymentMethod: "Cartão" }),
+      Order.countDocuments({ ...nonCancelledPeriod, paymentStatus: "Paid", paymentMethod: "Pix" }),
+      Order.aggregate([
+        { $match: { readyAt: { $gte: start, $lt: end, $ne: null }, orderStatus: { $ne: "Cancelled" } } },
+        { $project: { timeDiff: { $subtract: ["$readyAt", "$orderDate"] } } },
+        { $group: { _id: null, average: { $avg: "$timeDiff" } } },
+      ]),
     ]);
     const revenue = revenueData[0]?.total || 0;
-    const completedCount = await Order.countDocuments({
-      orderStatus: "Completed",
-      updatedAt: { $gte: start, $lt: end },
-    });
-
-    // Contagens por método de pagamento (apenas pedidos com pagamento efetuado)
-    const cashCount = await Order.countDocuments({
-      orderDate: { $gte: start, $lt: end },
-      paymentStatus: "Paid",
-      paymentMethod: "Dinheiro"
-    });
-    const cardCount = await Order.countDocuments({
-      orderDate: { $gte: start, $lt: end },
-      paymentStatus: "Paid",
-      paymentMethod: "Cartão"
-    });
-    const pixCount = await Order.countDocuments({
-      orderDate: { $gte: start, $lt: end },
-      paymentStatus: "Paid",
-      paymentMethod: "Pix"
-    });
-
-    // Média diária de preparo
-    const avgTimeData = await Order.aggregate([
-      { $match: { readyAt: { $gte: start, $lt: end, $ne: null } } },
-      { $project: { timeDiff: { $subtract: ["$readyAt", "$orderDate"] } } },
-      { $group: { _id: null, average: { $avg: "$timeDiff" } } },
-    ]);
     const averageTimeMinutes = avgTimeData.length
       ? Math.round(avgTimeData[0].average / 60000)
       : 0;

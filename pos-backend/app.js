@@ -40,12 +40,14 @@ app.use(
     origin: ["http://localhost:5173", "http://10.33.14.90:5173"],
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 
 // Request logger
 app.use((req, res, next) => {
-  console.log(`📡 ${req.method} ${req.url}`);
+  if (config.nodeEnv !== "production") {
+    console.log(`📡 ${req.method} ${req.url}`);
+  }
   next();
 });
 

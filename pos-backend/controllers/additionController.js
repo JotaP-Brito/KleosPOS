@@ -3,7 +3,7 @@ const createHttpError = require("http-errors");
 
 const getAdditions = async (req, res, next) => {
   try {
-    const additions = await Addition.find({});
+    const additions = await Addition.find({}).lean();
     res.status(200).json({ success: true, data: additions });
   } catch (error) {
     next(error);

@@ -34,4 +34,6 @@ const productSchema = new mongoose.Schema(
   }
 );
 
+productSchema.index({ isAvailable: 1, category: 1 });
+
 module.exports = mongoose.model('Product', productSchema);

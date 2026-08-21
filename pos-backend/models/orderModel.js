@@ -76,4 +76,11 @@ const orderSchema = new mongoose.Schema({
     },
 }, { timestamps: true });
 
+// Covers the order board, dashboard, customer history, and daily-summary queries.
+orderSchema.index({ orderDate: -1 });
+orderSchema.index({ orderStatus: 1, orderDate: -1 });
+orderSchema.index({ "customerDetails.phone": 1, orderDate: -1 });
+orderSchema.index({ paymentStatus: 1, paymentMethod: 1, orderDate: -1 });
+orderSchema.index({ readyAt: 1, orderStatus: 1 });
+
 module.exports = mongoose.model("Order", orderSchema);

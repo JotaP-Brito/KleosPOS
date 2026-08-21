@@ -9,7 +9,7 @@ const addTable = async (req, res, next) => {
       const error = createHttpError(400, "Please provide table No!");
       return next(error);
     }
-    const isTablePresent = await Table.findOne({ tableNo });
+    const isTablePresent = await Table.exists({ tableNo });
 
     if (isTablePresent) {
       const error = createHttpError(400, "Table already exist!");
@@ -31,7 +31,7 @@ const getTables = async (req, res, next) => {
     const tables = await Table.find().populate({
       path: "currentOrder",
       select: "customerDetails"
-    });
+    }).lean();
     res.status(200).json({ success: true, data: tables });
   } catch (error) {
     next(error);

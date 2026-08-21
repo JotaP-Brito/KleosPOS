@@ -16,7 +16,7 @@ console.log('admin type:', typeof admin);
 router.get('/', async (req, res, next) => {
   console.log('🔥 GET /api/product hit');
   try {
-    const products = await Product.find({});
+    const products = await Product.find({}).lean();
     res.status(200).json({
       success: true,
       count: products.length,
