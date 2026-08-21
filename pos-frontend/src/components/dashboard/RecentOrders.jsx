@@ -24,7 +24,7 @@ const RecentOrders = () => {
   const { data: resData, isError, isLoading } = useQuery({
     queryKey: ["recentOrders"],
     queryFn: async () => {
-      return await getOrders();
+      return await getOrders({ active: true });
     },
     placeholderData: keepPreviousData,
   });

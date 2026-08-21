@@ -87,7 +87,7 @@ const Kitchen = () => {
   // Dados dos pedidos
   const { data: resData, isLoading, isError } = useQuery({
     queryKey: ["kitchenOrders"],
-    queryFn: () => kitchenAxios.get("/order").then((res) => res.data.data),
+    queryFn: () => kitchenAxios.get("/order", { params: { active: "true" } }).then((res) => res.data.data),
     refetchInterval: 2000,
   });
 

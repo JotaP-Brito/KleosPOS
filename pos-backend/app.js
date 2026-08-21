@@ -146,9 +146,13 @@ cron.schedule("0 0 * * *", async () => {
     const start = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate());
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
-    const orderCount = await Order.countDocuments({ orderDate: { $gte: start, $lt: end } });
+    const nonCancelledPeriod = {
+      orderDate: { $gte: start, $lt: end },
+      orderStatus: { $ne: "Cancelled" },
+    };
+    const orderCount = await Order.countDocuments(nonCancelledPeriod);
     const revenueData = await Order.aggregate([
-      { $match: { orderDate: { $gte: start, $lt: end } } },
+      { $match: nonCancelledPeriod },
       { $group: { _id: null, total: { $sum: "$bills.totalWithTax" } } },
     ]);
     const revenue = revenueData[0]?.total || 0;
@@ -159,22 +163,25 @@ cron.schedule("0 0 * * *", async () => {
 
     const cashCount = await Order.countDocuments({
       orderDate: { $gte: start, $lt: end },
+      orderStatus: { $ne: "Cancelled" },
       paymentStatus: "Paid",
       paymentMethod: "Dinheiro"
     });
     const cardCount = await Order.countDocuments({
       orderDate: { $gte: start, $lt: end },
+      orderStatus: { $ne: "Cancelled" },
       paymentStatus: "Paid",
       paymentMethod: "Cartão"
     });
     const pixCount = await Order.countDocuments({
       orderDate: { $gte: start, $lt: end },
+      orderStatus: { $ne: "Cancelled" },
       paymentStatus: "Paid",
       paymentMethod: "Pix"
     });
 
     const avgTimeData = await Order.aggregate([
-      { $match: { readyAt: { $gte: start, $lt: end, $ne: null } } },
+      { $match: { readyAt: { $gte: start, $lt: end, $ne: null }, orderStatus: { $ne: "Cancelled" } } },
       { $project: { timeDiff: { $subtract: ["$readyAt", "$orderDate"] } } },
       { $group: { _id: null, average: { $avg: "$timeDiff" } } },
     ]);

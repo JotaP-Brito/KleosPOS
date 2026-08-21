@@ -26,7 +26,7 @@ const Orders = () => {
 
   const { data: resData, isError } = useQuery({
     queryKey: ["orders"],
-    queryFn: getOrders,
+    queryFn: () => getOrders({ active: true }),
     placeholderData: keepPreviousData,
     refetchInterval: 5000,
   });

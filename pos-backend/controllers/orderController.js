@@ -132,9 +132,14 @@ const getOrderById = async (req, res, next) => {
 
 const getOrders = async (req, res, next) => {
   try {
-    const orders = await Order.find()
+    const activeOnly = req.query.active === "true";
+    const filter = activeOnly
+      ? { orderStatus: { $nin: ["Completed", "Cancelled"] } }
+      : {};
+
+    const orders = await Order.find(filter)
       .sort({ orderDate: -1 })
-      .populate("table")
+      .populate("table", "tableNo status seats")
       .lean();
     res.status(200).json({ data: orders });
   } catch (error) {
