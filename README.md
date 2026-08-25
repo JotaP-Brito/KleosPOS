@@ -1,4 +1,8 @@
-# Restaurant POS System
+# Kleos — Restaurant POS System
+
+<p align="center">
+  <img src="docs/brand/kleos-logo.png" alt="Kleos logo" width="460" />
+</p>
 
 > A full-stack restaurant POS with a WhatsApp ordering assistant, built for the day-to-day flow of **Hamburgueria Cantinho do Sabor**.
 
