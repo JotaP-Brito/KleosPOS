@@ -1,289 +1,207 @@
-# Restaurant POS System with WhatsApp Ordering Bot
+# Restaurant POS System
 
-A full-stack restaurant point-of-sale system built with **Node.js**, **Express**, **MongoDB**, **React**, **Electron**, and **OpenWA**.
+> A full-stack restaurant POS with a WhatsApp ordering assistant, built for the day-to-day flow of **Hamburgueria Cantinho do Sabor**.
 
-It includes an **automated WhatsApp assistant** that takes orders, sends the menu as an image, and guides customers through a complete ordering flow — all without human intervention.
+Manage tables, orders, payments, products, daily closing, and customer campaigns from one desktop-friendly dashboard. Customers can also place an order through WhatsApp: the bot understands the message, sends the menu when asked, collects fulfilment and payment details, and saves the confirmed order straight into the POS.
 
----
+<p align="center">
+  <img src="docs/images/dashboard.png" alt="Restaurant POS home dashboard" width="100%" />
+</p>
 
-# Features
+## Features
 
-* 🧾 **POS Interface** – React-based management of orders, tables, products, payments, and daily summaries.
-* 🍔 **WhatsApp Ordering Bot** – Customers send natural messages like *“2 X-Bacon, 1 Coca”* and the bot processes them automatically.
-* 🖼️ **Menu Image Delivery** – Sends a JPEG menu upon request.
-* 🤖 **Hybrid Order Parsing** – Keyword matching first, then a local LLM (Ollama) as a fallback.
-* 🗺️ **Smart Address Extraction** – Understands Brazilian street names and asks for clarification when the address is weak.
-* 📊 **Daily Summaries** – Cron job saves total orders, revenue, and payment breakdowns every midnight (`America/Sao_Paulo` timezone).
-* 🖥️ **Electron Desktop App** – Optional wrapper for the POS frontend for a native experience.
+- **Fast POS workflow** — manage orders, tables, menu items, additions, payments, receipts, and daily summaries.
+- **WhatsApp ordering bot** — accepts natural messages such as `2 X-Bacon, 1 Coca` and guides customers from order to confirmation.
+- **Menu delivery** — replies to `cardápio` or `menu` with the restaurant’s menu image.
+- **Hybrid item recognition** — tries deterministic keyword matching first, then uses a local Ollama model as a fallback.
+- **Delivery-aware checkout** — asks for fulfilment type, delivery address when needed, and payment method.
+- **Customer marketing** — includes campaigns for favourite items, happy hour, upgrades, additions, and reactivation.
+- **Daily operations** — captures daily revenue and payment totals at midnight in the `America/Sao_Paulo` timezone.
+- **Desktop-ready** — can be packaged as an Electron application for a native POS experience.
 
----
+## Application preview
 
-# Tech Stack
+| Home dashboard | Orders |
+| --- | --- |
+| ![Home dashboard showing daily restaurant metrics](docs/images/dashboard.png) | ![Orders screen showing active customer orders](docs/images/orders.png) |
+| **POS menu** | **Administrative centre** |
+| ![Menu screen with products and order cart](docs/images/menu.png) | ![Administrative dashboard for bot and reports](docs/images/admin.png) |
+| **Marketing & configuration** | **Employee login** |
+| ![Marketing campaigns and settings](docs/images/marketing.png) | ![Employee login screen](docs/images/login.png) |
 
-| Component           | Technology                           |
-| ------------------- | ------------------------------------ |
-| Backend             | Node.js, Express, MongoDB (Mongoose) |
-| Frontend            | React (Vite), Redux, Tailwind CSS    |
-| Desktop App         | Electron                             |
-| WhatsApp Gateway    | OpenWA (Docker container)            |
-| AI / LLM (optional) | Ollama (`phi3:mini`) running locally |
-| Cron Jobs           | node-cron                            |
-
----
-
-# Project Structure
+## Architecture
 
 ```text
-Restaurant_POS_System/
-├── pos-backend/       # Express API, WhatsApp webhook, models, utils
-├── pos-frontend/      # React POS dashboard
-├── electron-app/      # Electron wrapper for the frontend
-├── OpenWA/            # OpenWA Docker configuration & data
-└── .gitignore
+WhatsApp customer
+        │
+        ▼
+ OpenWA gateway ── webhook ──► Express API ──► MongoDB
+                                  │       │
+                                  │       └── Ollama (optional fallback)
+                                  ▼
+                            React POS dashboard
+                                  │
+                                  └── Electron desktop wrapper (optional)
 ```
 
----
+| Area | Technology |
+| --- | --- |
+| API | Node.js, Express, Mongoose, node-cron |
+| POS dashboard | React, Vite, Redux, Tailwind CSS |
+| Database | MongoDB |
+| WhatsApp gateway | OpenWA via Docker |
+| Optional AI fallback | Ollama local model |
+| Desktop distribution | Electron |
 
-# Prerequisites
+## Quick start
 
-Before starting, make sure you have installed:
-
-* **Node.js** (v18 or newer)
-* **MongoDB** (local instance or cloud connection string)
-* **Docker** (required for OpenWA if not running natively)
-* **OpenWA**
-* **Ollama** *(optional, only for LLM fallback)*
-
-Helpful links:
-
-* OpenWA: https://openwa.dev/docs/getting-started
-* Ollama: https://ollama.com
-
----
-
-# Installation
-
-## 1. Clone the Repository
+### 1. Clone the project
 
 ```bash
 git clone https://github.com/joaolopezs/ProjectJoaoterio2.0.git
 cd ProjectJoaoterio2.0
 ```
 
----
-
-## 2. Backend Setup
+### 2. Configure and start the API
 
 ```bash
 cd pos-backend
 npm install
 ```
 
-Create a `.env` file (or copy from `env.defaults`):
+Create `pos-backend/.env`. The values below are safe local-development examples; use your own secrets and WhatsApp session ID.
 
 ```env
 PORT=3000
-MONGO_URI=mongodb://localhost:27017/pos
-OPENWA_API_KEY=dev-admin-key
-OLLAMA_URL=http://localhost:11434/api/chat
-OLLAMA_MODEL=phi3:mini
-```
+MONGODB_URI=mongodb://localhost:27017/pos-db
+JWT_SECRET=replace-with-a-long-random-secret
 
-Start the backend:
+OPENWA_URL=http://localhost:2785
+OPENWA_API_KEY=dev-admin-key
+OPENWA_SESSION_ID=your-openwa-session-id
+
+OLLAMA_URL=http://localhost:11434
+LLM_MODEL=qwen2.5:1.5b-instruct-q4_K_M
+```
 
 ```bash
 npm start
 ```
 
----
+The API starts on `http://localhost:3000` and also serves a production frontend build when one is available.
 
-## 3. Frontend Setup
+### 3. Start the POS dashboard
+
+In a second terminal:
 
 ```bash
-cd ../pos-frontend
+cd pos-frontend
 npm install
 npm run dev
 ```
 
-Frontend runs at:
+Open `http://localhost:5173`.
 
-```text
-http://localhost:5173
-```
+### 4. Start OpenWA
 
----
-
-## 4. OpenWA (WhatsApp Gateway)
-
-From the `OpenWA` folder:
+OpenWA is required to receive and reply to WhatsApp messages. With Docker running:
 
 ```bash
-cd ../OpenWA
+cd OpenWA
 docker compose up -d
 ```
 
-OpenWA API will run at:
-
-```text
-http://localhost:2785
-```
-
-### Initial Setup
-
-1. Scan the QR code to connect your WhatsApp account.
-2. Session data will persist inside:
-
-```text
-OpenWA/data
-```
-
-3. Register the webhook:
+The local OpenWA API is exposed at `http://localhost:2785` by default. Create or connect a session, scan its QR code, and make sure the session ID matches `OPENWA_SESSION_ID` in the backend `.env` file. On startup, the backend registers this webhook when it is missing:
 
 ```text
 http://host.docker.internal:3000/api/whatsapp/webhook
 ```
 
-For event type:
+It listens for `message.received` events.
 
-```text
-message.received
-```
+### 5. Enable local AI parsing (optional)
 
----
-
-## 5. Ollama (Optional)
-
-Only needed if you want AI fallback parsing.
-
-Install the model:
+The bot still uses keyword matching without Ollama. To enable the fallback parser, install Ollama and pull the default model:
 
 ```bash
-ollama pull phi3:mini
+ollama pull qwen2.5:1.5b-instruct-q4_K_M
 ```
 
-The backend automatically uses Ollama if keyword extraction fails.
-
----
-
-# WhatsApp Bot Flow
-
-1. Customer sends any message → receives a greeting.
-2. Customer sends order (example: `"2 X-Bacon, 1 Coca"`).
-3. Bot extracts items and asks:
-
-   * Delivery or pickup
-4. Bot requests:
-
-   * Address (if delivery)
-   * Payment method
-5. Bot shows order summary.
-6. Customer confirms with `"sim"`.
-7. Order is saved to MongoDB and appears in the POS dashboard.
-
-### Additional Features
-
-* Sending `"cardápio"` or `"menu"` automatically sends the restaurant menu image.
-* If customer replies `"não"`, they can modify the order without restarting the flow.
-
----
-
-# Customization
-
-## Menu Items & Additions
-
-Manage directly through:
-
-* POS dashboard
-* MongoDB collections
-
----
-
-## LLM Prompt
-
-Edit:
+## WhatsApp order flow
 
 ```text
-pos-backend/utils/llmParser.js
+Message → item extraction → delivery / pickup → address (if delivery)
+        → payment method → order summary → “sim” confirmation → POS order
 ```
 
----
+1. A customer sends a greeting, a menu request, or an order message.
+2. The bot recognises products and additions by keywords; it uses Ollama when necessary.
+3. It asks whether the order is for dine-in, takeaway, or delivery.
+4. For deliveries, it asks for a complete address; it then collects payment details.
+5. The customer receives a summary and confirms with `sim`.
+6. The confirmed order is persisted in MongoDB and becomes visible in the POS dashboard.
 
-## Casual Replies
+Replying with `não` lets the customer adjust the order without starting again. Sending `cardápio` or `menu` sends the menu image.
 
-Edit:
+## Configuration
 
-```text
-getCasualReply()
-```
+| Variable | Purpose | Local default |
+| --- | --- | --- |
+| `PORT` | Backend port | `3000` |
+| `MONGODB_URI` | MongoDB connection string | `mongodb://localhost:27017/pos-db` |
+| `JWT_SECRET` | Authentication signing secret | Required for production |
+| `OPENWA_URL` | OpenWA API URL | `http://localhost:2785` |
+| `OPENWA_API_KEY` | OpenWA API key | `dev-admin-key` |
+| `OPENWA_SESSION_ID` | Connected WhatsApp session | Required for automated messaging |
+| `OLLAMA_URL` | Ollama host URL | `http://localhost:11434` |
+| `LLM_MODEL` | Ollama fallback model | `qwen2.5:1.5b-instruct-q4_K_M` |
+| `MENU_IMAGE_URL` | Public URL for the WhatsApp menu image | `/public/images/cardapio.jpeg` on the API host |
 
-Inside:
+> Never commit a populated `.env` file. Rotate any credentials that have been exposed outside your local environment.
 
-```text
-pos-backend/routes/whatsappRoute.js
-```
+## Customization
 
----
+- **Products and additions:** maintain them through the POS dashboard or MongoDB collections.
+- **Menu image:** replace [`pos-backend/public/images/cardapio.jpeg`](pos-backend/public/images/cardapio.jpeg) and set `MENU_IMAGE_URL` if it needs to be publicly reachable from OpenWA.
+- **LLM instructions:** adjust the extraction prompt in [`pos-backend/utils/llmParser.js`](pos-backend/utils/llmParser.js).
+- **Casual WhatsApp responses:** update the reply helper in [`pos-backend/utils/Whatsapphelpers.js`](pos-backend/utils/Whatsapphelpers.js).
+- **Daily timezone:** scheduled summaries and marketing jobs use `America/Sao_Paulo`; update the cron settings if the restaurant operates elsewhere.
 
-## Menu Image
+## Build the desktop application
 
-Replace:
-
-```text
-pos-backend/public/images/cardapio.jpeg
-```
-
-And update the URL inside:
-
-```text
-sendMenuImage()
-```
-
----
-
-# Environment Variables
-
-| Variable       | Description               | Default                         |
-| -------------- | ------------------------- | ------------------------------- |
-| PORT           | Backend server port       | 3000                            |
-| MONGO_URI      | MongoDB connection string | Required                        |
-| OPENWA_API_KEY | API key for OpenWA        | dev-admin-key                   |
-| OLLAMA_URL     | Ollama endpoint           | http://localhost:11434/api/chat |
-| OLLAMA_MODEL   | Fallback model            | phi3:mini                       |
-
----
-
-# Deployment Notes
-
-* Build the Electron app:
+After building the frontend, package the Electron wrapper:
 
 ```bash
-cd electron-app
+cd pos-frontend
+npm run build
+
+cd ../electron-app
+npm install
 npm run dist
 ```
 
-* For production:
+The packaged app is written to `electron-app/dist/`.
 
-  * Replace `host.docker.internal` with the real backend IP/domain.
-  * Use a strong `OPENWA_API_KEY`.
-
-* Cron jobs currently use:
+## Project structure
 
 ```text
-America/Sao_Paulo
+Restaurant_POS_System/
+├── pos-backend/       # Express API, WhatsApp bot, models, cron jobs
+├── pos-frontend/      # React POS dashboard
+├── electron-app/      # Desktop application wrapper
+├── OpenWA/            # OpenWA Docker configuration and source
+└── docs/images/       # Product screenshots used by this README
 ```
 
-Change this if your restaurant operates in another timezone.
+## Prerequisites
 
----
+- Node.js 18+
+- MongoDB (local or hosted)
+- Docker (for the supplied OpenWA setup)
+- [Ollama](https://ollama.com/) — optional, for natural-language fallback parsing
 
-# License
+## License
 
-This project is intended for internal restaurant use.
-
-Modify and distribute as needed.
-
----
-
-# Author
+This project is intended for internal restaurant use. Modify and distribute it as needed.
 
 Built for João Pedro’s Restaurant 🍔
