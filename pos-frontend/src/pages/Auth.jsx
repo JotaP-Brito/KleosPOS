@@ -1,36 +1,35 @@
 import React, { useEffect, useState } from "react";
-import restaurantlogo from "../assets/images/logo.jpg"
-import logo from "../assets/images/logo.png"
-import Register from "../components/auth/Register";
+import restaurantlogo from "../assets/images/logo.jpg";
+import logo from "../assets/images/logo.png";
 import Login from "../components/auth/Login";
+import { getPinStatus } from "../https";
 
 const Auth = () => {
 
   useEffect(() => {
-    document.title = "POS | Auth"
+    document.title = "POS | Login";
   }, [])
 
-  const [isRegister, setIsRegister] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSetup, setIsSetup] = useState(false);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    try {
-        const { data } = await login({ email, password });
-        if (data.success) {
-            localStorage.setItem("authToken", data.token);   // 👈 Save token
-            // Dispatch user to Redux and navigate
-            dispatch(setUser(data.data));
-            navigate("/");
-        }
-    } catch (error) {
-        // handle error
-    }
-};
+  useEffect(() => {
+    const loadPinStatus = async () => {
+      try {
+        const { data } = await getPinStatus();
+        setIsSetup(!data.configured);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadPinStatus();
+  }, []);
 
   return (
-    <div className="flex min-h-screen w-full">
+    <div className="flex min-h-screen w-full bg-[#161616]">
       {/* Left Section */}
-      <div className="w-1/2 relative flex items-center justify-center bg-cover">
+      <div className="hidden lg:flex w-1/2 relative items-center justify-center bg-cover">
         {/* BG Image */}
         <img className="w-full h-full object-cover" src={restaurantlogo} alt="Restaurant Image" />
 
@@ -39,37 +38,26 @@ const Auth = () => {
 
         {/* Quote at bottom */}
         <blockquote className="absolute bottom-10 px-8 mb-10 text-2xl italic text-white">
-          "Um Presente Para Voces"
+          "Um presente para vocês"
           <br />
           <span className="block mt-4 text-yellow-400">- Joaozinho</span>
         </blockquote>
       </div>
 
       {/* Right Section */}
-      <div className="w-1/2 min-h-screen bg-[#1a1a1a] p-10">
-        <div className="flex flex-col items-center gap-2">
-          <img src={logo} alt="Cantinho Do Sabor" className="h-14 w-14 border-2 rounded-full p-1" />
-          <h1 className="text-lg font-semibold text-[#f5f5f5] tracking-wide">Hamburgueria Cantinho Do Sabor</h1>
+      <div className="w-full lg:w-1/2 min-h-screen bg-[#1a1a1a] px-6 py-10 sm:p-10 flex items-center justify-center">
+        <div className="w-full max-w-md">
+          <div className="flex flex-col items-center gap-3 mb-10">
+            <img src={logo} alt="Cantinho Do Sabor" className="h-16 w-16 border-2 border-yellow-400/70 rounded-full p-1" />
+            <h1 className="text-lg text-center font-semibold text-[#f5f5f5] tracking-wide">Hamburgueria Cantinho Do Sabor</h1>
+          </div>
+
+          {isLoading ? (
+            <div className="text-center text-[#ababab]">Preparing secure access…</div>
+          ) : (
+            <Login isSetup={isSetup} />
+          )}
         </div>
-
-        <h2 className="text-4xl text-center mt-10 font-semibold text-yellow-400 mb-10">
-          {isRegister ? "Employee Registration" : "Employee Login"}
-        </h2>
-
-        {/* Components */}  
-        {isRegister ? <Register setIsRegister={setIsRegister} /> : <Login />}
-
-
-        <div className="flex justify-center mt-6">
-          <p className="text-sm text-[#ababab]">
-            {isRegister ? "Already have an account?" : "Don't have an account?"}
-            <a onClick={() => setIsRegister(!isRegister)} className="text-yellow-400 font-semibold hover:underline" href="#">
-              {isRegister ? "Sign in" : "Sign up"}
-            </a>
-          </p>
-        </div>
-
-
       </div>
     </div>
   );

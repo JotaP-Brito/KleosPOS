@@ -4,26 +4,63 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const config = require("../config/config");
 
-const register = async (req, res, next) => {
+const isValidPin = (pin) => /^\d{4,6}$/.test(pin);
+
+const issueAccessToken = (user) => jwt.sign(
+    { _id: user._id },
+    config.accessTokenSecret,
+    { expiresIn: "1d" }
+);
+
+const sendLoginResponse = (res, user, message) => {
+    const accessToken = issueAccessToken(user);
+    const userData = user.toObject();
+    delete userData.pin;
+
+    res.cookie("accessToken", accessToken, {
+        maxAge: 1000 * 60 * 60 * 24 * 30,
+        httpOnly: true,
+        sameSite: "lax",
+        secure: false,
+        path: "/",
+    });
+
+    res.status(200).json({ success: true, message, data: userData, token: accessToken });
+};
+
+const getPinStatus = async (req, res, next) => {
     try {
-        const { name, phone, email, password, role } = req.body;
+        const user = await User.findOne().select("+pin");
+        res.status(200).json({ success: true, configured: Boolean(user?.pin) });
+    } catch (error) {
+        next(error);
+    }
+};
 
-        if (!name || !phone || !email || !password || !role) {
-            const error = createHttpError(400, "All fields are required!");
+const setupPin = async (req, res, next) => {
+    try {
+        const { pin } = req.body;
+
+        if (!isValidPin(pin)) {
+            const error = createHttpError(400, "Your PIN must contain 4 to 6 digits.");
             return next(error);
         }
 
-        const isUserPresent = await User.findOne({ email });
-        if (isUserPresent) {
-            const error = createHttpError(400, "User already exist!");
+        let user = await User.findOne().select("+pin");
+        if (user?.pin) {
+            const error = createHttpError(409, "A PIN has already been configured.");
             return next(error);
         }
 
-        const user = { name, phone, email, password, role };
-        const newUser = User(user);
-        await newUser.save();
+        const hashedPin = await bcrypt.hash(pin, 10);
+        if (user) {
+            user.pin = hashedPin;
+            await user.save();
+        } else {
+            user = await User.create({ name: "Administrator", role: "Admin", pin: hashedPin });
+        }
 
-        res.status(201).json({ success: true, message: "New user created!", data: newUser });
+        sendLoginResponse(res, user, "PIN created successfully!");
     } catch (error) {
         next(error);
     }
@@ -31,44 +68,26 @@ const register = async (req, res, next) => {
 
 const login = async (req, res, next) => {
     try {
-        const { email, password } = req.body;
+        const { pin } = req.body;
 
-        if (!email || !password) {
-            const error = createHttpError(400, "All fields are required!");
+        if (!isValidPin(pin)) {
+            const error = createHttpError(400, "Enter a 4 to 6 digit PIN.");
             return next(error);
         }
 
-        const isUserPresent = await User.findOne({ email });
-        if (!isUserPresent) {
-            const error = createHttpError(401, "Invalid Credentials");
+        const user = await User.findOne().select("+pin");
+        if (!user?.pin) {
+            const error = createHttpError(403, "Set up your PIN before signing in.");
             return next(error);
         }
 
-        const isMatch = await bcrypt.compare(password, isUserPresent.password);
+        const isMatch = await bcrypt.compare(pin, user.pin);
         if (!isMatch) {
-            const error = createHttpError(401, "Invalid Credentials");
+            const error = createHttpError(401, "Incorrect PIN. Please try again.");
             return next(error);
         }
 
-        const accessToken = jwt.sign({ _id: isUserPresent._id }, config.accessTokenSecret, {
-            expiresIn: "1d",
-        });
-
-        // FIXED COOKIE SETTINGS – allow HTTP in development
-        res.cookie("accessToken", accessToken, {
-            maxAge: 1000 * 60 * 60 * 24 * 30,
-            httpOnly: true,
-            sameSite: "lax",
-            secure: false,
-            path: "/",                  // 👈 Make cookie available to all routes
-        });
-
-        res.status(200).json({
-            success: true,
-            message: "User login successfully!",
-            data: isUserPresent,
-            token: accessToken,               // 👈 Send token to frontend
-        });
+        sendLoginResponse(res, user, "Signed in successfully!");
     } catch (error) {
         next(error);
     }
@@ -112,4 +131,4 @@ const kitchenAuth = async (req, res, next) => {
     }
 };
 
-module.exports = { register, login, getUserData, logout, kitchenAuth };
+module.exports = { getPinStatus, setupPin, login, getUserData, logout, kitchenAuth };

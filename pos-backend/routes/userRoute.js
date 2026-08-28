@@ -1,11 +1,12 @@
 const express = require("express");
-const { register, login, getUserData, logout } = require("../controllers/userController");
+const { getPinStatus, setupPin, login, getUserData, logout } = require("../controllers/userController");
 const { isVerifiedUser } = require("../middlewares/tokenVerification");
 const router = express.Router();
 
 
-// Authentication Routes
-router.route("/register").post(register);
+// Single-admin PIN authentication
+router.route("/pin-status").get(getPinStatus);
+router.route("/setup-pin").post(setupPin);
 router.route("/login").post(login);
 router.route("/logout").post(isVerifiedUser, logout)
 

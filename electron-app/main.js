@@ -81,28 +81,6 @@ async function startBackend() {
   });
 }
 
-// ── Auto‑login via injected script ──
-function injectAutoLogin(win) {
-  win.webContents.executeJavaScript(`
-    (async () => {
-      try {
-        const res = await fetch("http://localhost:3000/api/user/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ email: "123@gmail.com", password: "t2b4cjoao" })
-        });
-        if (res.ok) {
-          // The cookie is now set – reload to let the app see it
-          location.reload();
-        }
-      } catch (err) {
-        console.error("Auto‑login failed:", err);
-      }
-    })();
-  `).catch(err => console.error("Injection error:", err));
-}
-
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
@@ -111,15 +89,6 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true
-    }
-  });
-
-  // After the first page load, inject the auto‑login script
-  let firstLoad = true;
-  win.webContents.on("did-finish-load", () => {
-    if (firstLoad) {
-      firstLoad = false;
-      injectAutoLogin(win);
     }
   });
 

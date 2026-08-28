@@ -2,7 +2,8 @@ import { axiosWrapper } from "./axiosWrapper";
 
 // Auth Endpoints
 export const login = (data) => axiosWrapper.post("/user/login", data);
-export const register = (data) => axiosWrapper.post("/user/register", data);
+export const getPinStatus = () => axiosWrapper.get("/user/pin-status");
+export const setupPin = (pin) => axiosWrapper.post("/user/setup-pin", { pin });
 export const getUserData = () => axiosWrapper.get("/user");
 export const logout = () => axiosWrapper.post("/user/logout");
 
