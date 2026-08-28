@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
+/* eslint-disable react/prop-types */
+import { useCallback, useEffect, useState } from "react";
 import { HiArrowRight, HiBackspace, HiOutlineLockClosed } from "react-icons/hi2";
 import { login, setupPin } from "../../https/index";
 import { enqueueSnackbar } from "notistack";
@@ -50,7 +51,7 @@ const Login = ({ isSetup }) => {
 
       setIsSubmitting(true);
       try {
-        const response = isSetup ? await setupPin(pin) : await login(pin);
+        const response = isSetup ? await setupPin(pin) : await login({ pin });
         const { data } = response.data;
         localStorage.setItem("authToken", response.data.token);
         dispatch(setUser(data));

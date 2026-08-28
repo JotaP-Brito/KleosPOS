@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import restaurantlogo from "../assets/images/logo.jpg";
 import logo from "../assets/images/logo.png";
 import Login from "../components/auth/Login";
@@ -38,7 +38,7 @@ const Auth = () => {
 
         {/* Quote at bottom */}
         <blockquote className="absolute bottom-10 px-8 mb-10 text-2xl italic text-white">
-          "Um presente para vocês"
+          {"“Um presente para vocês”"}
           <br />
           <span className="block mt-4 text-yellow-400">- Joaozinho</span>
         </blockquote>
