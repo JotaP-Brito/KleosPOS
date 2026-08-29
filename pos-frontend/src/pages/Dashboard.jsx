@@ -1,172 +1,80 @@
-import React, { useState, useEffect } from "react";
-import { MdTableBar, MdCategory } from "react-icons/md";
-import { BiSolidDish } from "react-icons/bi";
-import { MdPlaylistAdd } from "react-icons/md";
-import { FiBarChart2 } from "react-icons/fi";   // ícone para o relatório
-import { RiRobot2Line } from "react-icons/ri";    // ícone para o bot
-import { useNavigate } from "react-router-dom";
-import Metrics from "../components/dashboard/Metrics";
-import RecentOrders from "../components/dashboard/RecentOrders";
-import Modal from "../components/dashboard/Modal";
+import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { enqueueSnackbar } from "notistack";
+import { axiosWrapper } from "../https/axiosWrapper";
+import { changePin, createAddition, deleteAddition, deleteProduct, deleteTable, getConnectionInfo, getTrackingMode, setTrackingMode, updateAddition, updateProduct, updateTable } from "../https";
 import DishModal from "../components/dashboard/DishModal";
 import CategoryModal from "../components/dashboard/CategoryModal";
-import PopularDishes from "../components/dashboard/PopularDishes";
-import AdditionsModal from "../components/dashboard/AdditionsModal";
-import DailyHistory from "../components/dashboard/DailyHistory";
-import { axiosWrapper } from "../https/axiosWrapper";
-import { useQueryClient } from "@tanstack/react-query";
-import { enqueueSnackbar } from "notistack";
 
-const buttons = [
-  { label: "Adicionar Mesa", icon: <MdTableBar />, action: "table" },
-  { label: "Adicionar Categoria", icon: <MdCategory />, action: "category" },
-  { label: "Adicionar Pratos", icon: <BiSolidDish />, action: "dishes" },
-  { label: "Adicionais", icon: <MdPlaylistAdd />, action: "additions" },
-];
-
-const tabs = ["Métricas", "Pedidos", "Pagamentos"];
+const currency = (n) => `R$ ${Number(n || 0).toFixed(2)}`;
+const fetchData = (url) => axiosWrapper.get(url).then((r) => r.data.data);
 
 const Dashboard = () => {
-  const navigate = useNavigate();
+  const [page, setPage] = useState("overview");
+  const [modal, setModal] = useState("");
+  const [closing, setClosing] = useState(false);
+  const [reportDays, setReportDays] = useState(120);
+  const [menuSection, setMenuSection] = useState("products");
+  const [productDrafts, setProductDrafts] = useState({});
+  const [additionDrafts, setAdditionDrafts] = useState({});
+  const [selectedTableId, setSelectedTableId] = useState("");
   const queryClient = useQueryClient();
+  useEffect(() => { document.title = "POS | Painel Admin"; }, []);
+  const useData = (key, url) => useQuery({ queryKey: [key], queryFn: () => fetchData(url) });
+  const metrics = useData("metrics", "/summary/metrics").data || {};
+  const history = useData("dailyHistory", "/summary/history").data || [];
+  const products = useData("adminProducts", "/product").data || [];
+  const tables = useData("adminTables", "/table").data || [];
+  const orders = useData("adminOrders", "/order").data || [];
+  const additions = useData("additions", "/addition").data || [];
+  const connection = useQuery({ queryKey: ["connectionInfo"], queryFn: () => getConnectionInfo().then((r) => r.data.data) }).data;
+  const tracking = useQuery({ queryKey: ["trackingMode"], queryFn: () => getTrackingMode().then((r) => r.data) }).data;
+  const bot = useQuery({ queryKey: ["botStatus"], queryFn: () => axiosWrapper.get("/bot-status").then((r) => r.data) }).data || { active: true };
+  const refresh = (...keys) => keys.forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
+  useEffect(() => { setProductDrafts(Object.fromEntries(products.map((product) => [product._id, { name: product.name, price: product.price, isAvailable: product.isAvailable !== false }]))); }, [products]);
+  useEffect(() => { setAdditionDrafts(Object.fromEntries(additions.map((addition) => [addition._id, { name: addition.name, price: addition.price }]))); }, [additions]);
+  useEffect(() => { if (tables.length && !tables.some((table) => table._id === selectedTableId)) setSelectedTableId(tables[0]._id); }, [tables, selectedTableId]);
 
-  useEffect(() => {
-    document.title = "POS | Painel Admin";
-  }, []);
-
-  // 🆕 Bot on/off state
-  const [isBotActive, setIsBotActive] = useState(true);
-  useEffect(() => {
-    // Fetch initial bot status
-    axiosWrapper.get("/bot-status")
-      .then(res => setIsBotActive(res.data.active))
-      .catch(() => setIsBotActive(true));
-  }, []);
-
-  const toggleBot = async () => {
-    try {
-      const res = await axiosWrapper.post("/bot-status/toggle", { active: !isBotActive });
-      setIsBotActive(res.data.active);
-      enqueueSnackbar(`Bot ${res.data.active ? "ativado" : "desativado"}!`, { variant: "success" });
-    } catch (error) {
-      enqueueSnackbar("Erro ao alternar bot", { variant: "error" });
-    }
-  };
-
-  const [isTableModalOpen, setIsTableModalOpen] = useState(false);
-  const [isDishModalOpen, setIsDishModalOpen] = useState(false);
-  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
-  const [isAdditionsModalOpen, setIsAdditionsModalOpen] = useState(false);
-  const [isResetting, setIsResetting] = useState(false);
-  const [activeTab, setActiveTab] = useState("Métricas");
-
-  const handleOpenModal = (action) => {
-    if (action === "table") setIsTableModalOpen(true);
-    if (action === "dishes") setIsDishModalOpen(true);
-    if (action === "category") setIsCategoryModalOpen(true);
-    if (action === "additions") setIsAdditionsModalOpen(true);
-  };
-
-  const handleResetDay = async () => {
-    if (!window.confirm("Guardar totais atuais e iniciar novo período?")) return;
-    setIsResetting(true);
-    try {
-      await axiosWrapper.post("/summary/reset");
-      enqueueSnackbar("Métricas reiniciadas!", { variant: "success" });
-      queryClient.invalidateQueries(["metrics"]);
-      queryClient.invalidateQueries(["dailyHistory"]);
-    } catch (error) {
-      enqueueSnackbar("Erro ao encerrar o dia", { variant: "error" });
-    } finally {
-      setIsResetting(false);
-    }
-  };
-
-  return (
-    <div className="bg-[#1f1f1f] h-[calc(100vh-5rem)]">
-      <div className="container mx-auto flex items-center justify-between py-14 px-6 md:px-4">
-        <div className="flex items-center gap-3">
-          {buttons.map(({ label, icon, action }) => (
-            <button
-              key={action}
-              onClick={() => handleOpenModal(action)}
-              className="bg-[#1a1a1a] hover:bg-[#262626] px-8 py-3 rounded-lg text-[#f5f5f5] font-semibold text-md flex items-center gap-2"
-            >
-              {label} {icon}
-            </button>
-          ))}
-
-          {/* Botão de relatório de itens */}
-          <button
-            onClick={() => navigate("/items-report")}
-            className="bg-[#1a1a1a] hover:bg-[#262626] px-8 py-3 rounded-lg text-[#f5f5f5] font-semibold text-md flex items-center gap-2"
-          >
-            <FiBarChart2 />
-            Relatório de Itens
-          </button>
-
-          {/* 🆕 Bot on/off toggle */}
-          <button
-            onClick={toggleBot}
-            className={`px-8 py-3 rounded-lg font-semibold text-md flex items-center gap-2 ${
-              isBotActive
-                ? "bg-green-600 hover:bg-green-700 text-white"
-                : "bg-red-600 hover:bg-red-700 text-white"
-            }`}
-          >
-            <RiRobot2Line />
-            {isBotActive ? "Bot Online" : "Bot Offline"}
-          </button>
-
-          {/* Botão de encerrar dia */}
-          <button
-            onClick={handleResetDay}
-            disabled={isResetting}
-            className="bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-semibold disabled:opacity-50"
-          >
-            {isResetting ? "..." : "Encerrar Dia"}
-          </button>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {tabs.map((tab) => (
-            <button
-              key={tab}
-              className={`px-8 py-3 rounded-lg text-[#f5f5f5] font-semibold text-md flex items-center gap-2 ${
-                activeTab === tab ? "bg-[#262626]" : "bg-[#1a1a1a] hover:bg-[#262626]"
-              }`}
-              onClick={() => setActiveTab(tab)}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {activeTab === "Métricas" && (
-        <div className="container mx-auto px-6 md:px-4">
-          <Metrics />
-          <div className="mt-6">
-            <PopularDishes />
-          </div>
-          <div className="mt-6">
-            <DailyHistory />
-          </div>
-        </div>
-      )}
-      {activeTab === "Pedidos" && <RecentOrders />}
-      {activeTab === "Pagamentos" && (
-        <div className="text-white p-6 container mx-auto">
-          Componente de Pagamento em Breve
-        </div>
-      )}
-
-      {isTableModalOpen && <Modal setIsTableModalOpen={setIsTableModalOpen} />}
-      {isDishModalOpen && <DishModal setIsDishModalOpen={setIsDishModalOpen} />}
-      {isCategoryModalOpen && <CategoryModal setIsCategoryModalOpen={setIsCategoryModalOpen} />}
-      {isAdditionsModalOpen && <AdditionsModal setIsAdditionsModalOpen={setIsAdditionsModalOpen} />}
-    </div>
-  );
+  const stats = useMemo(() => {
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - reportDays);
+    const valid = orders.filter((o) => o.orderStatus !== "Cancelled" && new Date(o.orderDate) >= cutoff); const payments = {}; const services = { "Dine-in": { orders: 0, revenue: 0 }, Takeaway: { orders: 0, revenue: 0 }, Delivery: { orders: 0, revenue: 0 } }; const items = {}; const totals = Array(7).fill(0); const dayKeys = Array.from({ length: 7 }, () => new Set()); const monthly = {}; const hourly = Array(7).fill(0); const combos = {}; const categories = {};
+    const categoryByName = new Map(products.map((product) => [product.name, product.category || "Sem categoria"]));
+    valid.forEach((o) => { const total = o.bills?.totalWithTax || 0; payments[o.paymentMethod || "Outros"] = (payments[o.paymentMethod || "Outros"] || 0) + total; const service = services[o.orderType] || services["Dine-in"]; service.orders += 1; service.revenue += total; const date = new Date(o.orderDate); const day = date.getDay(); totals[day] += total; dayKeys[day].add(date.toLocaleDateString("en-CA")); const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`; monthly[month] = (monthly[month] || 0) + total; const hour = date.getHours(); const hourIndex = hour === 0 ? 6 : hour >= 18 && hour <= 23 ? hour - 18 : -1; if (hourIndex >= 0) hourly[hourIndex] += 1; const names = [...new Set((o.items || []).map((i) => i.name))]; names.forEach((name) => { const quantity = o.items.find((item) => item.name === name)?.quantity || 1; items[name] = (items[name] || 0) + quantity; const category = categoryByName.get(name) || "Sem categoria"; categories[category] = (categories[category] || 0) + total / Math.max(names.length, 1); }); for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) { const key = [names[i], names[j]].sort().join(" + "); combos[key] = (combos[key] || 0) + 1; } });
+    const weekday = totals.map((n, i) => dayKeys[i].size ? n / dayKeys[i].size : 0); const revenue = valid.reduce((sum, order) => sum + (order.bills?.totalWithTax || 0), 0);
+    return { payments, services, items: Object.entries(items).sort((a, b) => b[1] - a[1]).slice(0, 7), weekday, monthly: Object.entries(monthly).sort(([a], [b]) => a.localeCompare(b)).slice(-4), hourly, combos: Object.entries(combos).sort((a, b) => b[1] - a[1]).slice(0, 5), categories: Object.entries(categories).sort((a, b) => b[1] - a[1]).slice(0, 6), revenue, orderCount: valid.length, bestDay: ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"][weekday.indexOf(Math.max(...weekday))] };
+  }, [orders, products, reportDays]);
+  const closeDay = async () => { if (!window.confirm("Guardar totais atuais e iniciar novo período?")) return; setClosing(true); try { await axiosWrapper.post("/summary/reset"); enqueueSnackbar("Dia encerrado.", { variant: "success" }); refresh("metrics", "dailyHistory"); } catch { enqueueSnackbar("Erro ao encerrar o dia.", { variant: "error" }); } finally { setClosing(false); } };
+  const saveProduct = async (product) => { const draft = productDrafts[product._id]; if (!draft?.name?.trim() || Number(draft.price) < 0) return enqueueSnackbar("Informe nome e preço válidos.", { variant: "error" }); try { await updateProduct(product._id, { ...product, ...draft, name: draft.name.trim(), price: Number(draft.price) }); refresh("adminProducts"); enqueueSnackbar("Item atualizado.", { variant: "success" }); } catch { enqueueSnackbar("Erro ao atualizar item.", { variant: "error" }); } };
+  const editTable = async (t) => { const seats = window.prompt("Lugares", t.seats); if (seats === null) return; await updateTable({ tableId: t._id, seats: Number(seats), tableNo: t.tableNo }); refresh("adminTables"); };
+  const deleteEntity = async (entity, item) => { if (!window.confirm(`Excluir ${item.name || `mesa ${item.tableNo}`}?`)) return; try { entity === "product" ? await deleteProduct(item._id) : await deleteTable(item._id); refresh(entity === "product" ? "adminProducts" : "adminTables"); } catch (e) { enqueueSnackbar(e.response?.data?.message || "Não foi possível excluir.", { variant: "error" }); } };
+  const saveAddition = async (addition) => { const draft = additionDrafts[addition._id]; if (!draft?.name?.trim() || Number(draft.price) < 0) return enqueueSnackbar("Informe nome e preço válidos.", { variant: "error" }); try { await updateAddition(addition._id, { ...addition, name: draft.name.trim(), price: Number(draft.price) }); refresh("additions"); enqueueSnackbar("Configuração atualizada.", { variant: "success" }); } catch { enqueueSnackbar("Erro ao atualizar configuração.", { variant: "error" }); } };
+  const removeAddition = async (addition) => { if (!window.confirm(`Excluir ${addition.name}?`)) return; try { await deleteAddition(addition._id); refresh("additions"); enqueueSnackbar("Configuração excluída.", { variant: "success" }); } catch { enqueueSnackbar("Não foi possível excluir.", { variant: "error" }); } };
+  const createTypedAddition = async (type) => { const name = window.prompt(type === "extra" ? "Nome do adicional" : "Nome da observação"); if (!name?.trim()) return; const price = type === "extra" ? window.prompt("Preço do adicional", "0") : "0"; if (price === null || Number(price) < 0) return; try { await createAddition({ name: name.trim(), price: Number(price), type }); refresh("additions"); enqueueSnackbar(type === "extra" ? "Adicional criado." : "Observação criada.", { variant: "success" }); } catch { enqueueSnackbar("Não foi possível criar.", { variant: "error" }); } };
+  const changeAdminPin = async () => { const current = window.prompt("PIN atual"); if (!current) return; const next = window.prompt("Novo PIN (4 a 6 dígitos)"); if (!next) return; try { await changePin(current, next); enqueueSnackbar("PIN alterado com sucesso.", { variant: "success" }); } catch (e) { enqueueSnackbar(e.response?.data?.message || "Não foi possível alterar o PIN.", { variant: "error" }); } };
+  const nav = [["overview", "Visão geral"], ["menu", "Menu e mesas"], ["reports", "Relatórios"], ["connectivity", "Conectividade"]];
+  return <main className="min-h-[calc(100vh-5rem)] bg-[#1f1f1f] text-[#f5f5f5] p-5 md:p-8"><div className="max-w-7xl mx-auto"><header className="flex flex-col gap-4 border-b border-[#383838] pb-5 md:flex-row md:justify-between md:items-center"><div><h1 className="text-2xl font-bold">Painel administrativo</h1><p className="text-[#ababab] text-sm mt-1">Gestão, relatórios e conectividade.</p></div><button onClick={closeDay} disabled={closing} className="bg-red-600 hover:bg-red-700 px-5 py-3 rounded-lg font-bold disabled:opacity-50">{closing ? "Encerrando…" : "Encerrar o dia"}</button></header><nav className="flex gap-2 overflow-x-auto py-5">{nav.map(([id, label]) => <button key={id} onClick={() => setPage(id)} className={`whitespace-nowrap px-4 py-2 rounded-lg font-semibold ${page === id ? "bg-[#f6b100] text-[#1f1f1f]" : "bg-[#292929] text-[#ababab]"}`}>{label}</button>)}</nav>
+    {page === "overview" && <div className="space-y-5"><section className="grid grid-cols-2 lg:grid-cols-4 gap-4">{[["Faturamento", currency(metrics.revenue)], ["Pedidos", metrics.ordersToday || 0], ["Ticket médio", currency((metrics.revenue || 0) / (metrics.ordersToday || 1))], ["Em aberto", metrics.activeOrders || 0]].map(([l, v]) => <div key={l} className="bg-[#242424] border border-[#343434] p-5 rounded-xl"><p className="text-sm text-[#ababab]">{l}</p><p className="font-bold text-2xl mt-2">{v}</p></div>)}</section><section className="grid lg:grid-cols-2 gap-5"><Panel title="Formas de pagamento">{Object.entries(stats.payments).map(([n, v]) => <Bar key={n} label={n} value={currency(v)} percent={v / Math.max(metrics.revenue || 1, 1) * 100} />)}</Panel><Panel title="Histórico de encerramentos">{history.slice(0, 5).map((d) => <div key={d._id} className="flex justify-between border-b border-[#343434] py-2 text-sm"><span>{d.date}</span><span>{d.orderCount} pedidos</span><strong>{currency(d.revenue)}</strong></div>)}</Panel></section></div>}
+    {page === "menu" && <section className="space-y-5"><div className="rounded-2xl border border-[#383838] bg-[#242424] p-5 md:p-7"><div className="flex flex-col gap-4 border-b border-[#383838] pb-5 md:flex-row md:items-start md:justify-between"><div><p className="text-[#f6b100] text-xs font-bold tracking-[0.16em] uppercase">Cardápio e salão</p><h2 className="mt-1 text-2xl font-bold">Configurações do restaurante</h2><p className="mt-2 text-sm text-[#ababab]">Itens, adicionais, observações e mesas em uma única seção.</p></div><button onClick={() => setModal("dish")} className="rounded-lg bg-[#f6b100] px-4 py-3 text-sm font-bold text-[#1f1f1f]">+ Novo item</button></div><div className="mt-4 flex gap-2 overflow-x-auto">{[["products", "Cardápio e preços"], ["extras", "Adicionais"], ["observations", "Observações"], ["tables", "Mesas e salão"]].map(([id, label]) => <button key={id} onClick={() => setMenuSection(id)} className={`whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-semibold ${menuSection === id ? "bg-[#343434] text-white" : "text-[#ababab]"}`}>{label}</button>)}</div></div>
+      {menuSection === "products" && <div className="space-y-4"><div className="flex flex-col gap-3 rounded-2xl border border-[#383838] bg-[#242424] p-5 md:flex-row md:items-center md:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#f6b100]">Cardápio e preços</p><h2 className="mt-1 text-xl font-bold">Atualização rápida do cardápio</h2><p className="mt-1 text-sm text-[#ababab]">Edite o nome, preço e disponibilidade. As alterações entram no POS imediatamente.</p></div><div className="flex gap-2"><button onClick={() => setModal("category")} className="rounded-lg border border-[#454545] bg-[#292929] px-3 py-2 text-sm font-semibold">Categorias</button><button onClick={() => setModal("dish")} className="rounded-lg bg-[#f6b100] px-3 py-2 text-sm font-bold text-[#1f1f1f]">+ Novo item</button></div></div><MenuProductList products={products} drafts={productDrafts} setDrafts={setProductDrafts} onSave={saveProduct} onDelete={(product) => deleteEntity("product", product)} /></div>}
+      {menuSection === "extras" && <AdditionSection title="Adicionais" subtitle="Complementos cobrados que podem ser usados nos pedidos." additions={additions.filter((addition) => addition.type === "extra")} drafts={additionDrafts} setDrafts={setAdditionDrafts} onCreate={() => createTypedAddition("extra")} onSave={saveAddition} onDelete={removeAddition} />}
+      {menuSection === "observations" && <AdditionSection title="Observações" subtitle="Preferências gratuitas e instruções enviadas para o pedido e a cozinha." additions={additions.filter((addition) => addition.type === "observation")} drafts={additionDrafts} setDrafts={setAdditionDrafts} onCreate={() => createTypedAddition("observation")} onSave={saveAddition} onDelete={removeAddition} observation />}
+      {menuSection === "tables" && <TablesSection tables={tables} selectedTableId={selectedTableId} setSelectedTableId={setSelectedTableId} onCreate={() => setModal("table")} onEdit={editTable} onDelete={(table) => deleteEntity("table", table)} />}
+    </section>}
+    {page === "reports" && <ReportsSection stats={stats} reportDays={reportDays} setReportDays={setReportDays} />}
+    {page === "connectivity" && <ConnectivitySection connection={connection} bot={bot} tracking={tracking} onRefresh={() => refresh("connectionInfo", "botStatus", "trackingMode")} onToggleBot={async () => { await axiosWrapper.post("/bot-status/toggle", { active: !bot.active }); refresh("botStatus"); }} onToggleTracking={async () => { await setTrackingMode(!tracking?.active); refresh("trackingMode"); }} onChangePin={changeAdminPin} />}
+  </div>{modal === "dish" && <DishModal setIsDishModalOpen={() => { setModal(""); refresh("adminProducts"); }} />}{modal === "category" && <CategoryModal setIsCategoryModalOpen={() => setModal("")} />}{modal === "table" && <CreateTable close={() => { setModal(""); refresh("adminTables"); }} />}</main>;
 };
-
+const MenuProductList = ({ products, drafts, setDrafts, onSave, onDelete }) => <section className="overflow-hidden rounded-2xl border border-[#383838] bg-[#242424]"><header className="flex items-center justify-between border-b border-[#383838] px-5 py-4"><div><h3 className="font-bold">Itens do cardápio</h3><p className="mt-1 text-xs text-[#ababab]">{products.length} itens cadastrados</p></div></header><div>{products.map((product) => { const draft = drafts[product._id] || product; return <div key={product._id} className="grid gap-4 border-b border-[#343434] p-5 last:border-b-0 xl:grid-cols-[minmax(220px,1fr)_170px_145px_86px_80px] xl:items-center"><div><label className="text-[10px] font-bold uppercase tracking-wider text-[#ababab]">Nome do item</label><input value={draft.name || ""} onChange={(event) => setDrafts((current) => ({ ...current, [product._id]: { ...draft, name: event.target.value } }))} className="mt-1 w-full bg-transparent text-base font-bold outline-none focus:text-[#f6b100]" /><p className="mt-1 text-sm text-[#ababab]">{product.description || product.category || "Sem descrição"}</p></div><div><label className="text-[10px] font-bold uppercase tracking-wider text-[#ababab]">Preço (R$)</label><input value={draft.price ?? ""} inputMode="decimal" onChange={(event) => setDrafts((current) => ({ ...current, [product._id]: { ...draft, price: event.target.value } }))} className="mt-1 w-full rounded-lg border border-[#454545] bg-[#1a1a1a] px-3 py-2 text-sm font-bold text-[#f6b100] outline-none focus:border-[#f6b100]" /><p className="mt-1 text-xs text-[#ababab]">Atual: {currency(product.price)}</p></div><button onClick={() => setDrafts((current) => ({ ...current, [product._id]: { ...draft, isAvailable: !draft.isAvailable } }))} className="rounded-lg border border-[#454545] bg-[#292929] px-3 py-2.5 text-sm font-semibold">{draft.isAvailable ? "✓ Disponível" : "Indisponível"}</button><button onClick={() => onSave(product)} className="rounded-lg bg-[#f6b100] px-3 py-2.5 text-sm font-bold text-[#1f1f1f]">Salvar</button><button onClick={() => onDelete(product)} className="rounded-lg border border-red-900/70 px-3 py-2.5 text-sm font-semibold text-red-300">Excluir</button></div>; })}{!products.length && <p className="p-6 text-sm text-[#ababab]">Nenhum item cadastrado.</p>}</div></section>;
+const AdditionSection = ({ title, subtitle, additions, drafts, setDrafts, onCreate, onSave, onDelete, observation }) => <div className="space-y-4"><div className="flex flex-col gap-3 rounded-2xl border border-[#383838] bg-[#242424] p-5 md:flex-row md:items-center md:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#f6b100]">{title}</p><h2 className="mt-1 text-xl font-bold">{observation ? "Preferências rápidas do pedido" : "Complementos do cardápio"}</h2><p className="mt-1 text-sm text-[#ababab]">{subtitle}</p></div><button onClick={onCreate} className="rounded-lg bg-[#f6b100] px-4 py-3 text-sm font-bold text-[#1f1f1f]">+ Novo {observation ? "observação" : "adicional"}</button></div><section className="overflow-hidden rounded-2xl border border-[#383838] bg-[#242424]"><header className="flex justify-between border-b border-[#383838] px-5 py-4"><div><h3 className="font-bold">{title} cadastrados</h3><p className="mt-1 text-xs text-[#ababab]">{additions.length} {additions.length === 1 ? "opção" : "opções"}</p></div></header>{additions.map((addition) => { const draft = drafts[addition._id] || addition; return <div key={addition._id} className="grid gap-4 border-b border-[#343434] p-5 last:border-b-0 lg:grid-cols-[minmax(180px,1fr)_150px_86px_80px] lg:items-center"><div><label className="text-[10px] font-bold uppercase tracking-wider text-[#ababab]">{observation ? "Observação" : "Adicional"}</label><input value={draft.name || ""} onChange={(event) => setDrafts((current) => ({ ...current, [addition._id]: { ...draft, name: event.target.value } }))} className="mt-1 w-full bg-transparent text-base font-bold outline-none focus:text-[#f6b100]" /><p className="mt-1 text-sm text-[#ababab]">{observation ? "Enviada como instrução no pedido." : "Cobrado individualmente no pedido."}</p></div><div><label className="text-[10px] font-bold uppercase tracking-wider text-[#ababab]">Preço (R$)</label><input value={draft.price ?? ""} inputMode="decimal" disabled={observation} onChange={(event) => setDrafts((current) => ({ ...current, [addition._id]: { ...draft, price: event.target.value } }))} className="mt-1 w-full rounded-lg border border-[#454545] bg-[#1a1a1a] px-3 py-2 text-sm font-bold text-[#f6b100] disabled:opacity-60" /></div><button onClick={() => onSave(addition)} className="rounded-lg bg-[#f6b100] px-3 py-2.5 text-sm font-bold text-[#1f1f1f]">Salvar</button><button onClick={() => onDelete(addition)} className="rounded-lg border border-red-900/70 px-3 py-2.5 text-sm font-semibold text-red-300">Excluir</button></div>; })}{!additions.length && <p className="p-6 text-sm text-[#ababab]">Ainda não há {observation ? "observações" : "adicionais"} cadastrados.</p>}</section></div>;
+const TablesSection = ({ tables, selectedTableId, setSelectedTableId, onCreate, onEdit, onDelete }) => { const selected = tables.find((table) => table._id === selectedTableId) || tables[0]; const position = (index) => ({ left: `${8 + (index % 3) * 31}%`, top: `${10 + Math.floor(index / 3) * 36}%` }); const tone = (status) => status === "Occupied" ? "border-[#a8791c] bg-[#352d17]" : status === "Reserved" ? "border-sky-800 bg-sky-950/40" : "border-[#494944] bg-[#2b2b29]"; const label = (status) => ({ Available: "Livre", Occupied: "Ocupada", Reserved: "Reservada" }[status] || status || "Livre"); return <div className="space-y-4"><div className="flex flex-col gap-3 rounded-2xl border border-[#383838] bg-[#242424] p-5 md:flex-row md:items-center md:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#f6b100]">Mesas e salão</p><h2 className="mt-1 text-xl font-bold">Mapa de operação do salão</h2><p className="mt-1 text-sm text-[#ababab]">Crie, edite e acompanhe a situação de cada mesa.</p></div><button onClick={onCreate} className="rounded-lg bg-[#f6b100] px-4 py-3 text-sm font-bold text-[#1f1f1f]">+ Nova mesa</button></div><div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_310px]"><section className="relative min-h-[420px] overflow-hidden rounded-2xl border border-[#383838] bg-[#202020]"><header className="flex justify-between border-b border-[#383838] px-5 py-4 text-sm text-[#ababab]"><span>Salão principal · {tables.length} mesas</span><span>Selecione uma mesa</span></header><div className="absolute inset-x-0 bottom-0 top-[53px] bg-[radial-gradient(#3a3a37_1px,transparent_1px)] [background-size:18px_18px]">{tables.map((table, index) => <button key={table._id} onClick={() => setSelectedTableId(table._id)} style={position(index)} className={`absolute h-[72px] w-[108px] rounded-xl border text-center ${tone(table.status)} ${selected?._id === table._id ? "outline outline-2 outline-offset-2 outline-[#f6b100]" : ""}`}><strong className="block text-sm">Mesa {table.tableNo}</strong><span className="mt-1 block text-[11px] text-[#b3afa7]">{label(table.status)} · {table.seats || 4} lugares</span></button>)}</div></section><aside className="rounded-2xl border border-[#383838] bg-[#242424] p-5">{selected ? <><h3 className="text-lg font-bold">Mesa {selected.tableNo}</h3><p className="mt-1 text-sm text-[#ababab]">Selecionada no mapa do salão.</p><div className="mt-5 space-y-0"><Info label="Status atual" value={label(selected.status)} accent /><Info label="Capacidade" value={`${selected.seats || 4} lugares`} /><Info label="Pedido atual" value={selected.currentOrder ? "Em andamento" : "Nenhum"} /></div><div className="mt-5 flex flex-wrap gap-2"><button onClick={() => onEdit(selected)} className="rounded-lg border border-[#454545] bg-[#292929] px-3 py-2 text-sm font-semibold">Editar mesa</button><button onClick={() => onDelete(selected)} className="rounded-lg border border-red-900/70 px-3 py-2 text-sm font-semibold text-red-300">Excluir mesa</button></div></> : <p className="text-sm text-[#ababab]">Crie a primeira mesa para configurar o salão.</p>}</aside></div></div>; };
+const Info = ({ label, value, accent }) => <div className="flex items-center justify-between border-b border-[#383838] py-3 text-sm"><span className="text-[#ababab]">{label}</span><strong className={accent ? "rounded bg-[#3a3015] px-2 py-1 text-xs text-[#f6b100]" : "text-right"}>{value}</strong></div>;
+const ConnectivitySection = ({ connection, bot, tracking, onRefresh, onToggleBot, onToggleTracking, onChangePin }) => { const online = Boolean(connection?.serverAddress); return <section className="space-y-5"><div className="flex flex-col gap-4 rounded-2xl border border-[#383838] bg-[#242424] p-5 md:flex-row md:items-start md:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#f6b100]">Conectividade</p><h2 className="mt-1 text-2xl font-bold">Dispositivos e comunicação</h2><p className="mt-2 text-sm text-[#ababab]">Conexões do POS com a cozinha, garçons e atendimento ao cliente.</p></div><div className={`rounded-lg border px-3 py-2 text-sm font-bold ${online ? "border-green-900 bg-green-950/40 text-green-300" : "border-[#454545] bg-[#292929] text-[#ababab]"}`}>{online ? "● Sistema online" : "Carregando conexão…"}</div></div><section className="overflow-hidden rounded-2xl border border-[#383838] bg-[#242424]"><header className="flex flex-col gap-3 border-b border-[#383838] px-5 py-4 md:flex-row md:items-center md:justify-between"><div><h3 className="font-bold">Dispositivos do restaurante</h3><p className="mt-1 text-sm text-[#ababab]">Use estes dados para conectar equipamentos à mesma rede do POS.</p></div><button onClick={onRefresh} className="rounded-lg border border-[#454545] bg-[#292929] px-3 py-2 text-sm font-semibold">Atualizar status</button></header><div className="grid divide-y divide-[#383838] md:grid-cols-2 md:divide-x md:divide-y-0"><ConnectionTile title="POS principal" description="Endereço local que centraliza pedidos, cardápio e relatórios." value={connection?.serverAddress || "Carregando…"} detail={connection?.addresses?.[0] ? `${connection.addresses[0].adapter}: ${connection.addresses[0].address}` : ""} /><ConnectionTile title="Tela da cozinha · KDS" description="Mostra pedidos em produção e recebe o alerta sonoro de novos pedidos." value={connection?.kds?.url || "Carregando…"} detail={connection?.kds?.configured ? "Senha do KDS configurada" : "Defina KITCHEN_SECRET para proteger o KDS"} /><ConnectionTile title="Aplicativo do garçom" description="Permite criar pedidos de mesa, para levar e delivery pelo celular." value={connection?.waiter?.serverAddress || "Carregando…"} detail={connection?.waiter?.configured ? "Chave do aplicativo configurada" : "Defina WAITER_APP_KEY para conectar o aplicativo"} /><ConnectionTile title="Rede local" description="Todos os dispositivos devem estar no mesmo Wi‑Fi ou cabo de rede." value={connection?.hostname || "POS"} detail={`${connection?.addresses?.length || 0} endereço(s) disponível(is)`} /></div></section><section className="overflow-hidden rounded-2xl border border-[#383838] bg-[#242424]"><header className="border-b border-[#383838] px-5 py-4"><h3 className="font-bold">Atendimento pelo WhatsApp</h3><p className="mt-1 text-sm text-[#ababab]">Status e controles de mensagens em uma única área.</p></header><div className="grid gap-4 p-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(260px,.55fr)]"><div className="overflow-hidden rounded-xl border border-[#383838]"><ControlRow title="WhatsApp conectado" description={connection?.whatsapp?.configured ? `Sessão ${connection.whatsapp.sessionId || "configurada"} pronta para receber mensagens.` : "Nenhuma sessão configurada. Conecte o WhatsApp para receber pedidos."} status={connection?.whatsapp?.configured ? "Conectado" : "Não configurado"} /><ControlRow title="Bot de atendimento" description="Responde mensagens e ajuda o cliente a montar o pedido automaticamente." checked={Boolean(bot.active)} onToggle={onToggleBot} /><ControlRow title="Rastreamento silencioso" description="Registra dados do atendimento sem enviar mensagens extras ao cliente." checked={Boolean(tracking?.active)} onToggle={onToggleTracking} last /></div><aside className="rounded-xl border border-[#62521e] bg-[#2a2818] p-5"><h4 className="font-bold text-[#f6c83d]">O que o cliente percebe</h4><p className="mt-2 text-sm leading-6 text-[#d4cca5]">Com o bot ativo, o cliente recebe ajuda automaticamente. O rastreamento silencioso só registra informações—ele não inicia nem altera conversas.</p><p className="mt-4 text-xs text-[#bdb48a]">O status e os controles são atualizados pelo POS.</p></aside></div></section><section className="grid gap-5 md:grid-cols-2"><Panel title="Segurança do administrador"><p className="-mt-3 mb-4 text-sm text-[#ababab]">O PIN protege o acesso ao POS e às configurações críticas.</p><button onClick={onChangePin} className="rounded-lg border border-[#454545] bg-[#292929] px-4 py-2.5 text-sm font-semibold">Alterar PIN</button></Panel><Panel title="Ajuda rápida"><p className="-mt-3 text-sm leading-6 text-[#ababab]">Se um dispositivo não conectar, confirme a rede local e use o endereço exibido acima. Depois atualize o status para conferir novamente.</p></Panel></section></section>; };
+const ConnectionTile = ({ title, description, value, detail }) => <article className="min-h-[176px] p-5"><h4 className="font-bold">{title}</h4><p className="mt-2 text-sm leading-6 text-[#ababab]">{description}</p><code className="mt-4 block w-fit max-w-full break-all rounded-lg border border-[#444] bg-[#191919] px-3 py-2 text-xs text-[#f6b100]">{value}</code>{detail && <p className="mt-3 text-xs text-[#ababab]">{detail}</p>}</article>;
+const ControlRow = ({ title, description, status, checked, onToggle, last }) => <div className={`flex items-center justify-between gap-5 p-4 ${last ? "" : "border-b border-[#383838]"}`}><div><h4 className="text-sm font-bold">{title}</h4><p className="mt-1 max-w-xl text-xs leading-5 text-[#ababab]">{description}</p></div>{onToggle ? <button aria-label={`Alternar ${title}`} onClick={onToggle} className={`relative h-7 w-12 shrink-0 rounded-full ${checked ? "bg-[#f6b100]" : "bg-[#4a4a47]"}`}><span className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${checked ? "left-6" : "left-1"}`} /></button> : <span className={`shrink-0 rounded-md px-2 py-1 text-xs font-bold ${status === "Conectado" ? "bg-green-950/50 text-green-300" : "bg-[#353535] text-[#bab6ae]"}`}>{status}</span>}</div>;
+const ReportsSection = ({ stats, reportDays, setReportDays }) => { const monthlyMax = Math.max(...stats.monthly.map(([, value]) => value), 1); const hourlyMax = Math.max(...stats.hourly, 1); const weekdayMax = Math.max(...stats.weekday, 1); const paymentEntries = Object.entries(stats.payments).sort(([, a], [, b]) => b - a); const serviceLabels = { "Dine-in": "No local", Takeaway: "Para levar", Delivery: "Delivery" }; return <section className="space-y-5"><div className="flex flex-col gap-4 rounded-2xl border border-[#383838] bg-[#242424] p-5 md:flex-row md:items-start md:justify-between"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-[#f6b100]">Relatórios</p><h2 className="mt-1 text-2xl font-bold">Inteligência de vendas</h2><p className="mt-2 text-sm text-[#ababab]">Dados do POS organizados para decisões mais rápidas.</p></div><select value={reportDays} onChange={(event) => setReportDays(Number(event.target.value))} className="rounded-lg border border-[#454545] bg-[#292929] px-3 py-2.5 text-sm font-semibold text-white"><option value={30}>Últimos 30 dias</option><option value={90}>Últimos 90 dias</option><option value={120}>Últimos 4 meses</option></select></div><div className="grid gap-3 md:grid-cols-3"><Metric label="Faturamento no período" value={currency(stats.revenue)} detail={`${stats.orderCount} pedidos no período`} /><Metric label="Ticket médio" value={currency(stats.revenue / Math.max(stats.orderCount, 1))} detail="Média por pedido concluído" /><Metric label="Melhor dia" value={stats.bestDay} detail="Maior média diária de vendas" /></div><div className="grid gap-5 xl:grid-cols-[1.4fr_.9fr]"><Panel title="Tendência de vendas"><p className="-mt-3 mb-5 text-sm text-[#ababab]">Faturamento consolidado por mês.</p><div className="flex h-52 items-end gap-4 border-b border-[#444] pb-2">{stats.monthly.map(([month, value]) => <div key={month} className="flex h-full flex-1 flex-col justify-end text-center"><span className="mb-2 text-xs text-[#ababab]">{currency(value)}</span><div className="rounded-t bg-[#f6b100]" style={{ height: `${value / monthlyMax * 100}%` }} /><span className="mt-2 text-xs text-[#ababab]">{month.slice(5)}</span></div>)}</div></Panel><Panel title="Métodos de pagamento"><p className="-mt-3 mb-4 text-sm text-[#ababab]">Total recebido no período selecionado.</p>{paymentEntries.length ? paymentEntries.map(([name, value]) => <Bar key={name} label={name} value={currency(value)} percent={value / Math.max(...paymentEntries.map(([, total]) => total), 1) * 100} />) : <p className="text-sm text-[#ababab]">Ainda não há pagamentos no período.</p>}<div className="mt-4 flex justify-between border-t border-[#444] pt-4 text-sm"><span className="text-[#ababab]">Total</span><strong className="text-[#f6b100]">{currency(stats.revenue)}</strong></div></Panel></div><div className="grid gap-5 xl:grid-cols-2"><Panel title="Receita por tipo de serviço"><p className="-mt-3 mb-4 text-sm text-[#ababab]">Pedidos e faturamento no período selecionado.</p><div className="overflow-x-auto"><table className="w-full min-w-[430px] text-left text-sm"><thead className="border-b border-[#444] text-xs uppercase tracking-wider text-[#ababab]"><tr><th className="pb-3 font-semibold">Tipo de serviço</th><th className="pb-3 text-right font-semibold">Pedidos</th><th className="pb-3 text-right font-semibold">Receita</th></tr></thead><tbody>{Object.entries(stats.services).map(([type, data]) => <tr key={type} className="border-b border-[#343434] last:border-b-0"><td className="py-4 font-semibold">{serviceLabels[type]}</td><td className="py-4 text-right">{data.orders}</td><td className="py-4 text-right font-bold">{currency(data.revenue)}</td></tr>)}</tbody><tfoot><tr><td className="pt-4 font-bold">Total</td><td className="pt-4 text-right font-bold">{stats.orderCount}</td><td className="pt-4 text-right font-bold text-[#f6b100]">{currency(stats.revenue)}</td></tr></tfoot></table></div></Panel><Panel title="Demanda por horário"><p className="-mt-3 mb-4 text-sm text-[#ababab]">Janela de operação: 18:30–23:30, com extensão ocasional até 00:00.</p><div className="flex h-40 items-end gap-2 border-b border-[#444] pb-2">{["18:30", "19:30", "20:30", "21:30", "22:30", "23:30", "00:00"].map((hour, index) => <div key={hour} className="flex h-full flex-1 flex-col justify-end text-center"><span className="mb-2 text-[10px] text-[#ababab]">{stats.hourly[index] || ""}</span><div className="rounded-t bg-[#f6b100]" style={{ height: `${stats.hourly[index] / hourlyMax * 100}%`, minHeight: stats.hourly[index] ? "7px" : 0 }} /><span className="mt-2 text-[10px] text-[#ababab]">{hour}</span></div>)}</div></Panel></div><div className="grid gap-5 xl:grid-cols-[1fr_1fr]"><Panel title="Média de vendas por dia"><p className="-mt-3 mb-4 text-sm text-[#ababab]">Domingo é excluído: restaurante fechado.</p>{["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map((day, index) => <Bar key={day} label={day} value={index === 0 ? "Fechado" : currency(stats.weekday[index])} percent={index === 0 ? 0 : stats.weekday[index] / weekdayMax * 100} />)}</Panel><Panel title="Previsão da próxima semana"><p className="-mt-3 mb-4 text-sm text-[#ababab]">Baseada na média histórica do mesmo dia da semana.</p>{["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"].map((day, index) => <div key={day} className="flex justify-between border-b border-[#343434] py-3 text-sm last:border-b-0"><span>{day}</span><strong>{currency(stats.weekday[index + 1])}</strong></div>)}</Panel></div><div className="grid gap-5 xl:grid-cols-3"><Panel title="Itens mais vendidos">{stats.items.map(([name, quantity]) => <div key={name} className="flex justify-between border-b border-[#343434] py-3 text-sm"><span>{name}</span><strong>{quantity} un.</strong></div>)}</Panel><Panel title="Categorias com maior receita">{stats.categories.map(([name, value]) => <Bar key={name} label={name} value={currency(value)} percent={value / Math.max(...stats.categories.map(([, total]) => total), 1) * 100} />)}</Panel><Panel title="Combinações mais frequentes">{stats.combos.length ? stats.combos.map(([name, quantity]) => <div key={name} className="flex justify-between border-b border-[#343434] py-3 text-sm"><span>{name}</span><strong>{quantity} pedidos</strong></div>) : <p className="text-sm text-[#ababab]">Ainda não há pedidos com dois itens para analisar.</p>}</Panel></div></section>; };
+const Metric = ({ label, value, detail }) => <div className="rounded-xl border border-[#383838] bg-[#242424] p-5"><p className="text-sm text-[#ababab]">{label}</p><p className="mt-2 text-2xl font-bold">{value}</p><p className="mt-2 text-xs text-[#ababab]">{detail}</p></div>;
+const Panel = ({ title, children }) => <div className="bg-[#242424] border border-[#343434] rounded-xl p-5"><h2 className="font-bold mb-4">{title}</h2>{children}</div>;
+const Action = ({ text, main, onClick }) => <button onClick={onClick} className={`mt-4 px-4 py-2 rounded-lg font-bold ${main ? "bg-[#f6b100] text-[#1f1f1f]" : "bg-[#343434] text-white"}`}>{text}</button>;
+const Bar = ({ label, value, percent }) => <div className="grid grid-cols-[48px_1fr_90px] gap-3 items-center mb-3 text-sm"><span>{label}</span><div className="h-2 rounded bg-[#3a3a3a]"><div className="h-2 rounded bg-[#f6b100]" style={{ width: `${Math.min(100, percent || 0)}%` }} /></div><span className="text-right">{value}</span></div>;
+const CreateTable = ({ close }) => { const [number, setNumber] = useState(""); const [seats, setSeats] = useState(4); return <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"><form onSubmit={async (e) => { e.preventDefault(); try { await axiosWrapper.post("/table", { tableNo: Number(number), seats: Number(seats) }); close(); } catch { enqueueSnackbar("Não foi possível criar a mesa.", { variant: "error" }); } }} className="bg-[#242424] p-6 rounded-xl w-full max-w-sm space-y-3"><h2 className="font-bold text-lg">Criar mesa</h2><input required value={number} onChange={(e) => setNumber(e.target.value)} placeholder="Número" className="w-full p-3 bg-[#1a1a1a] border border-[#444] rounded text-white" /><input required type="number" min="1" value={seats} onChange={(e) => setSeats(e.target.value)} className="w-full p-3 bg-[#1a1a1a] border border-[#444] rounded text-white" /><div className="flex justify-end gap-3"><button type="button" onClick={close}>Cancelar</button><button className="bg-[#f6b100] text-[#1f1f1f] px-4 py-2 rounded font-bold">Criar</button></div></form></div>; };
 export default Dashboard;

@@ -1,110 +1,87 @@
-const { app, BrowserWindow, utilityProcess } = require("electron");
 const path = require("path");
-const fs = require("fs");
-const { execSync } = require("child_process");
+const { app, BrowserWindow, dialog, Menu, shell } = require("electron");
 
-let backendProcess;
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) app.quit();
 
-// ── Kill any process on port 3000 (Windows) ──
-function freePort3000() {
-  if (process.platform !== "win32") return;
-  try {
-    const output = execSync("netstat -ano | findstr :3000").toString();
-    const lines = output.trim().split(/\r?\n/);
-    for (const line of lines) {
-      const parts = line.trim().split(/\s+/);
-      const pid = parts[parts.length - 1];
-      if (pid && !isNaN(pid)) {
-        try { execSync(`taskkill /PID ${pid} /F`, { stdio: "ignore" }); } catch (_) {}
-      }
-    }
-    return new Promise(resolve => setTimeout(resolve, 500));
-  } catch (_) {}
-  return Promise.resolve();
-}
+const isDev = !app.isPackaged;
+const backendPath = isDev
+  ? path.join(__dirname, "..", "pos-backend")
+  : path.join(process.resourcesPath, "pos-backend");
+const packagedFrontendPath = path.join(process.resourcesPath, "pos-frontend", "dist");
 
-// ── Make sure node_modules are present ──
-function ensureNodeModules(backendDir) {
-  const modulesDir = path.join(backendDir, "node_modules");
-  if (!fs.existsSync(modulesDir) || fs.readdirSync(modulesDir).length === 0) {
-    try {
-      execSync("npm install --production", { cwd: backendDir, stdio: "ignore" });
-    } catch (err) {
-      require("electron").dialog.showErrorBox(
-        "Erro",
-        "Não foi possível instalar as dependências do backend. Verifique se o Node.js está instalado."
-      );
-      app.quit();
-    }
-  }
-}
+let mainWindow = null;
+let backend = null;
 
-// ── Start the Express backend ──
-async function startBackend() {
-  const isDev = !app.isPackaged;
-  const backendDir = isDev
-    ? path.join(__dirname, "..", "pos-backend")
-    : path.join(process.resourcesPath, "pos-backend");
-
-  const frontendDistPath = isDev
-    ? path.join(__dirname, "..", "pos-frontend", "dist")
-    : path.join(process.resourcesPath, "pos-frontend", "dist");
-
-  await freePort3000();
-  ensureNodeModules(backendDir);
-
-  const modulePath = path.join(backendDir, "app.js");
-  const logPath = path.join(app.getPath("userData"), "backend.log");
-  const logStream = fs.createWriteStream(logPath, { flags: "a" });
-  logStream.write(`\n=== Backend started at ${new Date().toISOString()} ===\n`);
-
-  backendProcess = utilityProcess.fork(modulePath, [], {
-    cwd: backendDir,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
-      STATIC_FRONTEND_PATH: frontendDistPath
-    }
-  });
-
-  if (backendProcess.stdout) {
-    backendProcess.stdout.on("data", (data) => logStream.write(data));
-  }
-  if (backendProcess.stderr) {
-    backendProcess.stderr.on("data", (data) => logStream.write(data));
-  }
-
-  backendProcess.on("exit", (code) => {
-    logStream.write(`Backend exited with code ${code}\n`);
-    logStream.end();
-  });
-}
-
-function createWindow() {
-  const win = new BrowserWindow({
-    width: 1200,
+function createWindow(port) {
+  const fs = require("fs");
+  const iconPath = path.join(__dirname, "icon.ico");
+  mainWindow = new BrowserWindow({
+    width: 1366,
     height: 800,
-    title: "Hamburgueria Cantinho Do Sabor",
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true
-    }
+    show: false,
+    backgroundColor: "#1f1f1f",
+    titleBarStyle: "hidden",
+    titleBarOverlay: { color: "#1f1f1f", symbolColor: "#ffffff", height: 36 },
+    ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
 
-  win.loadURL("http://localhost:3000");
-
-  win.on("closed", () => {
-    if (backendProcess) backendProcess.kill();
+  Menu.setApplicationMenu(null);
+  mainWindow.loadURL(`http://localhost:${port}`);
+  mainWindow.once("ready-to-show", () => { mainWindow.maximize(); mainWindow.show(); });
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (!url || url === "about:blank") return { action: "allow" };
+    if (/^(https?:|mailto:|tel:)/i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
   });
+  mainWindow.on("closed", () => { mainWindow = null; });
+}
+
+async function startBackend() {
+  if (!isDev) process.env.STATIC_FRONTEND_PATH = packagedFrontendPath;
+  delete require.cache[require.resolve(path.join(backendPath, "app.js"))];
+  const backendModule = require(path.join(backendPath, "app.js"));
+  return backendModule.startServer();
+}
+
+async function bootWithRetry() {
+  try {
+    backend = await startBackend();
+    createWindow(backend.port);
+  } catch (error) {
+    const isDatabaseError = /ECONNREFUSED|MongoNetworkError|MongooseServerSelectionError/i.test(error.message || "");
+    const detail = isDatabaseError
+      ? `Não foi possível conectar ao MongoDB local. Confirme que o serviço MongoDB está instalado e em execução, depois tente novamente.\n\nDetalhe técnico: ${error.message}`
+      : `Detalhe técnico: ${error.message}`;
+    const choice = await dialog.showMessageBox({
+      type: "error",
+      title: "Hamburgueria POS - Erro ao iniciar",
+      message: "O POS não pôde iniciar.",
+      detail,
+      buttons: ["Tentar novamente", "Sair"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (choice.response === 0) return bootWithRetry();
+    app.quit();
+  }
 }
 
 app.whenReady().then(() => {
-  startBackend();
-  createWindow();
+  bootWithRetry();
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0 && backend) createWindow(backend.port);
+  });
 });
 
-app.on("window-all-closed", () => {
-  if (backendProcess) backendProcess.kill();
-  if (process.platform !== "darwin") app.quit();
+app.on("second-instance", () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+});
+
+app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+app.on("before-quit", () => {
+  try { require(path.join(backendPath, "app.js")).stopServer(); } catch (_) { /* ignore shutdown errors */ }
 });

@@ -18,6 +18,8 @@ const Kitchen = () => {
   const [token, setToken] = useState(localStorage.getItem("kitchenToken"));
   const [secret, setSecret] = useState("");
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const knownOrderIds = useRef(new Set());
+  const hasLoadedOrders = useRef(false);
 
   // Referência estável para o áudio
   const audioRef = useRef(null);
@@ -95,6 +97,28 @@ const Kitchen = () => {
     ["Pending", "In Progress"].includes(order.orderStatus)
   );
 
+  // Orders created by a waiter device arrive through the API, not localStorage.
+  // Detect them after polling so both the browser KDS and AlienKDS can alert.
+  useEffect(() => {
+    if (!activeOrders) return;
+    const currentIds = new Set(activeOrders.map((order) => order._id));
+    if (!hasLoadedOrders.current) {
+      knownOrderIds.current = currentIds;
+      hasLoadedOrders.current = true;
+      return;
+    }
+
+    const hasNewOrder = [...currentIds].some((id) => !knownOrderIds.current.has(id));
+    knownOrderIds.current = currentIds;
+    if (hasNewOrder) {
+      if (soundEnabled && audioRef.current) {
+        audioRef.current.currentTime = 0;
+        audioRef.current.play().catch(() => {});
+      }
+      window.dispatchEvent(new Event("kds:new-order"));
+    }
+  }, [activeOrders, soundEnabled]);
+
   const readyMutation = useMutation({
     mutationFn: (orderId) =>
       kitchenAxios.put(`/order/${orderId}`, { orderStatus: "Ready" }),
@@ -156,7 +180,7 @@ const Kitchen = () => {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {activeOrders.map((order) => (
-            <div key={order._id} className="bg-[#262626] rounded-lg p-4 flex flex-col">
+            <div key={order._id} data-order-id={order._id} className="order-card bg-[#262626] rounded-lg p-4 flex flex-col">
               <div className="flex justify-between items-center mb-2">
                 <h2 className="text-[#f5f5f5] font-bold text-lg">
                   {order.customerDetails.name}
